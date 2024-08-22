@@ -464,6 +464,7 @@ data GarbageGenerateOpts = GarbageGenerateOpts
     _ggoItems :: !NumberProbability,
     _ggoItem :: !CategoricalProbability,
     _ggoOptionalBlock :: !Double,
+    _ggoIdentifier :: !Double,
     _ggoInstOptionalDelay :: !Double,
     _ggoInstOptionalRange :: !Double,
     _ggoPrimitiveOptIdent :: !Double,
@@ -655,6 +656,7 @@ defGarbageOpts =
           _ggoItems = NPPoisson 0 3,
           _ggoItem = uniformCP,
           _ggoOptionalBlock = 0.5,
+          _ggoIdentifier = 0.5,
           _ggoInstOptionalDelay = 0.5,
           _ggoInstOptionalRange = 0.5,
           _ggoPrimitiveOptIdent = 0.5,
@@ -1236,6 +1238,7 @@ garbageGenerateCodec =
     <*> tfield _ggoItems "items" numProbCodec
     <*> tfield _ggoItem "item" catProbCodec
     <*> dfield _ggoOptionalBlock "optionalBlock"
+    <*> dfield _ggoIdentifier "optionalIdentifier"
     <*> dfield _ggoInstOptionalDelay "instance_optional_delay"
     <*> dfield _ggoInstOptionalRange "instance_optional_range"
     <*> dfield _ggoPrimitiveOptIdent "primitive_optional_name"

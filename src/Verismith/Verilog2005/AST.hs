@@ -1,5 +1,5 @@
 -- Module      : Verismith.Verilog2005.AST
--- Description : Partial Verilog 2005 AST.
+-- Description : Verilog 2005 AST.
 -- Copyright   : (c) 2023 Quentin Corradi
 -- License     : GPL-3
 -- Maintainer  : q [dot] corradi22 [at] imperial [dot] ac [dot] uk
@@ -110,7 +110,7 @@ module Verismith.Verilog2005.AST
     ModGenBlockedItem,
     ModGenSingleItem,
     ModuleItem (..),
-    GenerateBlock,
+    GenerateBlock (..),
     ModuleBlock (..),
     SigLevel (..),
     ZOX (..),
@@ -656,7 +656,7 @@ data FunctionStatement
   | FSBlock
       { _fsbHeader :: !(Maybe (Identifier, [AttrIded StdBlockDecl])),
         _fsbPar_seq :: !Bool,
-        _fsbStmt :: ![AttrFStmt]
+        _fsbBody :: ![AttrFStmt]
       }
   deriving (Show, Eq, Data, Generic)
 
@@ -702,7 +702,7 @@ data Statement
   | SBlock
       { _sbHeader :: !(Maybe (Identifier, [AttrIded StdBlockDecl])),
         _sbPar_seq :: !Bool,
-        _sbStmt :: ![AttrStmt]
+        _sbBody :: ![AttrStmt]
       }
   | SSysTaskEnable
       { _ssteIdent :: !ByteString,
@@ -733,7 +733,7 @@ instance Show NInputType where
   show x = case x of NITAnd -> "and"; NITOr -> "or"; NITXor -> "xor"
 
 -- | Instance name
-data InstanceName = InstanceName { _INIdent :: !Identifier, _INRange :: !(Maybe Range2) }
+data InstanceName = InstanceName { _inIdent :: !Identifier, _inRange :: !(Maybe Range2) }
   deriving (Show, Eq, Data, Generic)
 
 -- | Gate instances
@@ -1192,7 +1192,11 @@ data ModuleItem
   | MISpecBlock ![SpecifyBlockedItem]
   deriving (Show, Eq, Data, Generic)
 
-type GenerateBlock = Identified [Attributed ModGenBlockedItem]
+data GenerateBlock = GenerateBlock
+  { _gbIdent :: !(Maybe Identifier),
+    _gbBody :: ![Attributed ModGenBlockedItem]
+  }
+  deriving (Show, Eq, Data, Generic)
 
 -- | Module block
 data ModuleBlock = ModuleBlock

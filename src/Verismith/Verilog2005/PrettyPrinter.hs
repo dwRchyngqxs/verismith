@@ -321,9 +321,9 @@ prettyGExpr ppid ppr ppa l e = case e of
     ll <- (<=> viaShow op) <$> psexpr p el
     da <- ppa a
     case compare l p of
-      LT -> padj pp r >>= \rr -> mkid $ ng $ par $ ll <+> (da <?=> rr)
-      EQ -> first (\rr -> ll <+> (da <?=> rr)) <$> pp r
-      GT -> first (\rr -> ng $ ll <+> (da <?=> rr)) <$> pp r
+      LT -> padj pp r >>= mkid . ng . par . (ll <+>) . (da <?=>)
+      EQ -> first ((ll <+>) . (da <?=>)) <$> pp r
+      GT -> first (ng . (ll <+>) . (da <?=>)) <$> pp r
   ExprCond ec a et ef -> do
     dc <- psexpr 11 ec
     dt <- psexpr 12 et
@@ -472,9 +472,7 @@ prettyEdgeDesc x = do
     else
       if x == V.fromList [False, False, True, True, True, False]
         then pure "negedge"
-        else
-          (\x -> group $ "edge" <=> brk x)
-            <$> csl mempty mempty (pure . raw) (V.ifoldr (pED zx) [] x)
+        else group . ("edge" <=>) . brk <$> csl mempty mempty (pure . raw) (V.ifoldr (pED zx) [] x)
   where
     pED zx i b =
       if b
@@ -880,15 +878,15 @@ prettyModGenSingleItem x protect = case x of
       l
   MGIInitial s -> ("initial" <=>) <$> prettyAttrStmt protect s
   MGIAlways s -> ("always" <=>) <$> prettyAttrStmt protect s
-  MGILoopGen si vi cond su vu (Identified (Identifier s) i) -> do
+  MGILoopGen si vi cond su vu (GenerateBlock i b) -> do
     di <- gpadj (liftA2 prettyEq (rawId si) . prettyCExpr) vi
     dc <- ngpadj prettyCExpr cond
     du <- gpadj (liftA2 prettyEq (rawId su) . prettyCExpr) vu
     let head = "for" <=> gpar (di <> semi <+> dc <> semi <+> du)
-    case fromMGBlockedItem i of
-      [Attributed a x] | B.null s ->
+    case fromMGBlockedItem b of
+      [Attributed a x] | i == Nothing ->
         ng . (group head <=>) <$> prettyAttrThen a (prettyModGenSingleItem x protect)
-      r -> (ng head <=>) <$> prettyGBlock (Identifier s) r
+      r -> (ng head <=>) <$> prettyGBlock i r
   MGICondItem ci -> prettyModGenCondItem ci protect -- protect should never be True in practice
   where
     pname (InstanceName i r) = pm prettyRange2 r >>= \rng -> gpadj (padjWith prettyIdent rng) i
@@ -921,7 +919,7 @@ prettyModGenCondItem ci protect = case ci of
         (<#>)
         (\(GenCaseItem p v) -> gpadj (cslid1 prettyCExpr) p >>= \pat -> pGCB (pat <> colon) False v)
         b
-    dd <- case md of GCBEmpty -> pure mempty; _ -> nest <$> pGCB "default:" False md
+    dd <- case md of GCBEmpty -> pure mempty; _ -> pGCB "default:" False md
     return $ block (ng $ "case" <=> gpar dc) "endcase" (body <?#> dd)
   where
     isNotCond x = case x of MGICondItem _ -> False; _ -> True
@@ -929,23 +927,23 @@ prettyModGenCondItem ci protect = case ci of
       GCBEmpty -> pure $ head <> semi
       GCBConditional (Attributed a ci) ->
         ng . (group head <=>) <$> prettyAttrThen a (prettyModGenCondItem ci p)
-      GCBBlock (Identified (Identifier s) r) -> case fromMGBlockedItem r of
-        [Attributed a x] | B.null s && isNotCond x ->
+      GCBBlock (GenerateBlock i b) -> case fromMGBlockedItem b of
+        [Attributed a x] | i == Nothing && isNotCond x ->
           ng . (group head <=>) <$> prettyAttrThen a (prettyModGenSingleItem x protect)
-        r -> (ng head <=>) <$> prettyGBlock (Identifier s) r
+        r -> (ng head <=>) <$> prettyGBlock i r
 
 -- | Generate block
-prettyGBlock :: Identifier -> [Attributed ModGenSingleItem] -> Print
+prettyGBlock :: Maybe Identifier -> [Attributed ModGenSingleItem] -> Print
 prettyGBlock i l = do
-  bn <- rawId i
-  block ("begin" <> piff (colon <=> bn) (nullDoc bn)) "end"
+  bn <- pm (fmap (colon <=>) . rawId) i
+  block ("begin" <> bn) "end"
     <$> pl
       (<#>)
       (\(Attributed a x) -> prettyAttrThen a $ prettyModGenSingleItem x False)
       l
 
 prettyGenerateBlock :: GenerateBlock -> Print
-prettyGenerateBlock (Identified s x) = prettyGBlock s $ fromMGBlockedItem x
+prettyGenerateBlock (GenerateBlock s x) = prettyGBlock s $ fromMGBlockedItem x
 
 prettySpecParams :: Maybe Range2 -> NonEmpty SpecParamDecl -> Print
 prettySpecParams rng l = do
@@ -995,7 +993,7 @@ prettyPathDecl p pol eds = do
     po = maybe mempty (\p -> if p then "+" else "-") pol
     -- edge sensitive path polarity isn't at the same place as non edge sensitive
     noedge = eds == Nothing
-    fne = if noedge then uncurry (<>) else \x -> fst x <> newline
+    fne = if noedge then uncurry (<>) else (<> newline) . fst
 
 prettySpecifyItem :: SpecifySingleItem -> Print
 prettySpecifyItem x =

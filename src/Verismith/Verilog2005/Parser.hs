@@ -74,7 +74,7 @@ type LAPBranch a = [APBranch a]
 -- | An error that is not merged with other errors and expected tokens
 hardfail :: String -> Parser a
 hardfail m =
-  mkPT $ \s -> return $ Consumed $ return $ Error $ newErrorMessage (Message m) (statePos s)
+  mkPT $ pure . Consumed . pure . Error . newErrorMessage (Message m) . statePos
 
 -- | Warning formatting
 warn :: SourcePos -> String -> Parser ()
@@ -127,7 +127,7 @@ fproduce f = producePrim f <* anywherecompdir
 lproduce :: LProduce a -> Parser a
 lproduce l =
   fproduce (\t -> IntMap.lookup (getConsIndex t) $ mkActionMap l)
-    `labels` map (\(d, _) -> show d) l
+    `labels` map (show . fst) l
 
 -- | Maps a function on the data given by branching on a Token without data
 maplproduce :: (a -> b) -> LProduce a -> LProduce b
@@ -1050,12 +1050,12 @@ comModGenItem =
        ( KWBegin,
          \pos -> do
            warn pos "Generate blocks outside of for/if/case is a Verilog 2001 feature disallowed by later standards"
-           s <- option "" $ consume SymColon *> ident
+           s <- optionMaybe $ consume SymColon *> ident
            gr <- many $ parseItem id []
            closeConsume pos KWBegin KWEnd
            return $
              MGICondItem $
-               MGCIIf (CExpr $ genexprnumber 1) (GCBBlock $ Identified s $ concat gr) GCBEmpty
+               MGCIIf (CExpr $ genexprnumber 1) (GCBBlock $ GenerateBlock s $ concat gr) GCBEmpty
        ),
        ( KWAssign,
          const $
@@ -1094,7 +1094,7 @@ comModGenItem =
                  <* consume SymEq
                  <*> constExpr
              )
-             <*> (genBlock <|> Identified "" <$> genSingle)
+             <*> (genBlock <|> GenerateBlock Nothing <$> genSingle)
        ),
        ( KWTask,
          \pos -> do
@@ -1211,8 +1211,8 @@ modudpinstance what = do
   args <- parens $ do
     a <- attributes
     do {
-        x <- namePort a;
-        PortNamed . (x :) <$> commathen (xcsl "port connections" $ attributes >>= namePort)
+      x <- namePort a;
+      PortNamed . (x :) <$> commathen (xcsl "port connections" $ attributes >>= namePort)
     }
       <|> (ordPort a >>= \x -> PortPositional . (x :) <$> commathen (csl $ attributes >>= ordPort))
   let argl = case args of
@@ -1307,10 +1307,10 @@ genBlock :: Parser GenerateBlock
 genBlock = do
   pos <- getPosition
   consume KWBegin
-  i <- option "" $ consume SymColon *> ident
+  i <- optionMaybe $ consume SymColon *> ident
   b <- many $ parseItem id []
   closeConsume pos KWBegin KWEnd
-  return $ Identified i $ concat b
+  return $ GenerateBlock i $ concat b
 
 genSingle ::  Parser [Attributed ModGenBlockedItem]
 genSingle = do
@@ -1324,7 +1324,7 @@ genCondBlock = consume SymSemi *> return GCBEmpty <|> GCBBlock <$> genBlock <|> 
   gb <- genSingle
   return $ case gb of
     [Attributed a (MGICondItem ci)] -> GCBConditional $ Attributed a ci
-    _ -> GCBBlock $ Identified "" gb
+    _ -> GCBBlock $ GenerateBlock Nothing gb
 
 type PortInterface = Identified [Identified (Maybe CRangeExpr)]
 
