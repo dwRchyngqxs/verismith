@@ -33,13 +33,26 @@ module Verismith.Verilog2005.Utils
     fromMGBlockedItem1,
     fromMGBlockedItem_add,
     fromMGBlockedItem,
-    resolveInsts
+    resolveInsts,
+    binToNat,
+    octToNat,
+    hexToNat,
+    evalBinary,
+    evalBinaryUnlimited,
+    evalOctal,
+    evalOctalUnlimited,
+    evalHexadecimal,
+    evalHexadecimalUnlimited,
+    evalDecimal,
+    evalNumber,
+    evalConstExprSelfDetermined
   )
 where
 
 import Control.Lens ((%~))
 import Data.Data.Lens (biplate)
 import Numeric.Natural
+import Data.Bits
 import Text.Printf (printf)
 import Data.Functor.Compose
 import Data.Functor.Identity
@@ -51,6 +64,7 @@ import qualified Data.HashMap.Strict as HashMap
 import Data.List.NonEmpty (NonEmpty (..), (<|), toList)
 import qualified Data.List.NonEmpty as NE
 import Verismith.Verilog2005.Lexer (VerilogVersion (..), isIdentSimple)
+import Verismith.Verilog2005.Token (binToNat, octToNat, hexToNat)
 import Verismith.Verilog2005.AST
 import Verismith.Utils (nonEmpty, foldrMap1)
 
@@ -493,3 +507,102 @@ resolveInsts v = do
             )
     _ -> mgi
   where duperr = printf "module or primitive %s defined more than once" . show
+
+-- | Evaluates a binary number
+evalBinaryUnlimited :: NonEmpty BXZ -> Maybe Natural
+evalBinaryUnlimited (h :| t) =
+  foldl (\a x -> a >>= \n -> ((n .<<. 1) .|.) <$> binToNat x) (binToNat h) t
+
+-- TODO FROM HERE: don't use p, use use bit sz instead
+-- | Evaluates a binary number
+evalBinary :: Bool -> Natural -> NonEmpty BXZ -> Maybe Integer
+evalBinary sn sz =
+  fmap (\(_, _, n) -> n) . foldrMap1 (mknum 0 1 0) (\x -> (>>= \(csz, p, n) -> mknum csz p n x))
+  where
+    mknum csz p n x = (,,) (csz + 1) (n .<<. 1) <$> case x of
+      _ | csz >= sz -> Just n
+      BXZ0 -> Just n
+      BXZ1 | csz + 1 >= sz -> Just $ n - p
+      BXZ1 -> Just $ n + p
+      _ -> Nothing
+
+-- | Evaluates an octal number
+evalOctalUnlimited :: NonEmpty OXZ -> Maybe Natural
+evalOctalUnlimited (h :| t) =
+  foldl (\a x -> a >>= \n -> ((n .<<. 3) .|.) <$> octToNat x) (octToNat h) t
+
+-- | Evaluates an octal number
+evalOctal :: Bool -> Natural -> NonEmpty OXZ -> Maybe Integer
+evalOctal sn sz =
+  fmap (\(_, _, n) -> n) . foldrMap1 (mknum 0 1 0) (\x -> (>>= \(csz, p, n) -> mknum csz p n x))
+  where
+    mknum csz p n x = (,,) (csz + 3) (n .<<. 3) <$> case () of
+      () | csz >= sz -> Just n
+      () | csz + 3 >= sz ->
+        let b = bit $ fromEnum $ sz - csz - 1 in
+        (\o -> n + toInteger (o .&. (b - 1)) * p - toInteger (o .&. b) * p) <$> octToNat x
+      () -> (\o -> n + toInteger o * p) <$> octToNat x
+
+-- | Evaluates a hexadecimal number
+evalHexadecimalUnlimited :: NonEmpty HXZ -> Maybe Natural
+evalHexadecimalUnlimited (h :| t) =
+  foldl (\a x -> a >>= \n -> ((n .<<. 4) .|.) <$> hexToNat x) (hexToNat h) t
+
+-- | Evaluates a hexadecimal number
+evalHexadecimal :: Bool -> Natural -> NonEmpty HXZ -> Maybe Integer
+evalHexadecimal sn sz =
+  fmap (\(_, _, n) -> n) . foldrMap1 (mknum 0 1 0) (\x -> (>>= \(csz, p, n) -> mknum csz p n x))
+  where
+    mknum csz p n x = (,,) (csz + 4) (n .<<. 4) <$> case () of
+      () | csz >= sz -> Just n
+      () | csz + 4 >= sz ->
+        let b = bit $ fromEnum $ sz - csz - 1 in
+        (\h -> n + toInteger (h .&. (b - 1)) * p - toInteger (h .&. b) * p) <$> hexToNat x
+      () -> (\h -> n + toInteger h * p) <$> hexToNat x
+
+-- | Evaluates a decimal number
+evalDecimal :: Bool -> Natural -> Natural -> Integer
+evalDecimal sn sz n = toInteger (n .&. (b - 1)) - toInteger (n .&. b)
+  where b = bit $ fromEnum sz - 1
+
+-- | Evaluates a primary expression number
+evalNumber :: Maybe Natural -> Bool -> Number -> Maybe Integer
+evalNumber msz sn v = case v of
+  NBinary l -> case msz of
+    Nothing -> toInteger <$> evalBinaryUnlimited l
+    Just sz -> evalBinary sn sz l
+  NOctal l -> case msz of
+    Nothing -> toInteger <$> evalOctalUnlimited l
+    Just sz -> evalOctal sn sz l
+  NDecimal n -> case msz of
+    Nothing -> Just $ toInteger n
+    Just sz -> Just $ evalDecimal sn sz n
+  NHex l -> case msz of
+    Nothing -> toInteger <$> evalHexadecimalUnlimited l
+    Just sz -> evalHexadecimal sn sz l
+  _ -> Nothing
+
+-- TODO HERE
+evalConstExprSelfDetermined :: GenExpr i r a -> Maybe (Natural, bool, NonEmpty BZX)
+evalConstExprSelfDetermined x = case x of
+  ExprPrim p -> evalConstPrimSelfDetermined p
+  ExprUnOp o _ p -> case o of
+    Un... -> evalConstPrimSelfDetermined p
+  ExprBinOp l o _ r -> case o of
+    Bin... -> ...
+  ExprCond c _ t f -> exprZOX c >>= \zox -> case zox of
+    ZOXZ -> 
+    ZOXO -> 
+    ZOXX -> 
+
+evalConstPrimSelfDetermined :: GenPrim i r a -> Maybe (Natural, bool, NonEmpty BZX)
+evalConstPrimSelfDetermined x = case x of
+  PrimNumber sz sn v -> 
+  PrimReal s -> 
+  PrimIdent _ _ -> Nothing
+  PrimConcat l -> 
+  PrimMultConcat n e -> 
+  PrimFun _ _ _ -> Nothing
+  PrimSysFun i args -> 
+  PrimMinTypMax mtm -> 
+  PrimString s -> 

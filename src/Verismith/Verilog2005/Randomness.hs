@@ -44,8 +44,8 @@ import qualified Data.List.NonEmpty as NE
 import Control.Monad.Primitive (PrimMonad, PrimState, RealWorld)
 import Data.Word
 import Data.Bifunctor (first, second)
-import qualified Data.Vector.Unboxed as VU
-import qualified Data.Vector.Unboxed.Mutable as VM
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as VM
 import System.Random.MWC.Probability
 import Verismith.Config (CategoricalProbability (..), NumberProbability (..), uniformCP)
 import Verismith.Utils (nonEmpty, foldrMap1)
@@ -72,12 +72,12 @@ clean t =
     . uniq snd (\(x1, y1) (x2, y2) -> (x1 + x2, y1))
     . filter ((<= t) . snd)
 
-shuffle :: (PrimMonad m, VM.Unbox x) => Gen (PrimState m) -> [x] -> m [x]
+shuffle :: (PrimMonad m) => Gen (PrimState m) -> [x] -> m [x]
 shuffle gen l = do
   let n = length l - 1
-  v <- VU.thaw $ VU.fromList l
+  v <- V.thaw $ V.fromList l
   forM_ [0..n] $ \i -> sample (uniformR (i, n)) gen >>= VM.swap v i
-  VU.toList <$> VU.unsafeFreeze v
+  V.toList <$> V.unsafeFreeze v
 
 sampleCategoricalProbability ::
   PrimMonad m => Int -> Gen (PrimState m) -> CategoricalProbability -> m Int

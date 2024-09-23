@@ -18,6 +18,9 @@ module Verismith.Verilog2005.Token
     BXZ (..),
     OXZ (..),
     HXZ (..),
+    binToNat,
+    octToNat,
+    hexToNat,
     ZOX (..),
     Base (..),
   )
@@ -86,8 +89,23 @@ data AFRNP = AFRNPA | AFRNPF | AFRNPR | AFRNPN | AFRNPP
 data BXZ = BXZ0 | BXZ1 | BXZX | BXZZ
   deriving (Eq, Ord, Bounded, Enum, Data, Generic, NFData)
 
+binToNat :: BXZ -> Maybe Natural
+binToNat x = case x of BXZ0 -> Just 0; BXZ1 -> Just 1; _ -> Nothing
+
 data OXZ = OXZ0 | OXZ1 | OXZ2 | OXZ3 | OXZ4 | OXZ5 | OXZ6 | OXZ7 | OXZX | OXZZ
   deriving (Eq, Ord, Bounded, Enum, Data, Generic, NFData)
+
+octToNat :: OXZ -> Maybe Natural
+octToNat x = case x of
+  OXZ0 -> Just 0
+  OXZ1 -> Just 1
+  OXZ2 -> Just 2
+  OXZ3 -> Just 3
+  OXZ4 -> Just 4
+  OXZ5 -> Just 5
+  OXZ6 -> Just 6
+  OXZ7 -> Just 7
+  _ -> Nothing
 
 data HXZ
   = HXZ0
@@ -109,6 +127,26 @@ data HXZ
   | HXZX
   | HXZZ
   deriving (Eq, Ord, Bounded, Enum, Data, Generic, NFData)
+
+hexToNat :: HXZ -> Maybe Natural
+hexToNat x = case x of
+  HXZ0 -> Just 0
+  HXZ1 -> Just 1
+  HXZ2 -> Just 2
+  HXZ3 -> Just 3
+  HXZ4 -> Just 4
+  HXZ5 -> Just 5
+  HXZ6 -> Just 6
+  HXZ7 -> Just 7
+  HXZ8 -> Just 8
+  HXZ9 -> Just 9
+  HXZA -> Just 10
+  HXZB -> Just 11
+  HXZC -> Just 12
+  HXZD -> Just 13
+  HXZE -> Just 14
+  HXZF -> Just 15
+  _ -> Nothing
 
 data ZOX = ZOXZ | ZOXO | ZOXX
   deriving (Eq, Ord, Bounded, Enum, Data, Generic, NFData)

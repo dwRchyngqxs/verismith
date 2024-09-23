@@ -14,6 +14,8 @@ module Verismith.Verilog2005.Mutation
   )
 where
 
+import Numeric.Natural
+import Data.Bits
 import Data.Typeable
 import Data.Maybe
 import Data.List.NonEmpty (NonEmpty)
@@ -25,7 +27,7 @@ import Control.Monad.Reader
 import Verismith.Utils (mkpair)
 import Verismith.Verilog2005.Randomness
 import Verismith.Verilog2005.AST
-import Verismith.Verilog2005.Utils (fromStatement, toStatement)
+import Verismith.Verilog2005.Utils
 
 data MutationOpts = MutationOpts
   { _moIdentity :: !Double
@@ -66,7 +68,6 @@ type MutationVector t = [(Double, PrimMutation t)]
 type Mutation t = t -> Mutator t
 
 -- Mutation list:
--- MTM-> if single make 3, if 3 and same merge
 -- Identifier: Need to build the name hierarchy, only doable at module/Primitive/Generate/Config/function/whatever level
 -- Prim-> conversion of constant to a specific representation, concat one, multconcat from concat
 -- Function changes at global level
@@ -79,7 +80,6 @@ type Mutation t = t -> Mutator t
 -- Some may be incorrect because of signedness
 -- type aware rewrites? neq is |xor, "- -"-"", all rewrites in my ESA
 -- GenRangeExpr-> make single, make pair, make baseoff+ and baseoff
--- Delay-> 1/B to make2, 1/B to make3, B/2/3 to make1, 1 to Base
 -- SignRange: Change range and range references, change signedness and correct at callsite
 -- Assignment: At Global Level, rename; if never referenced elswhere, Merge Expr; At local level, Split Expr
 -- Parameter: At global level, rename, shuffle, offset the value at assign and deoffset at use
@@ -87,8 +87,7 @@ type Mutation t = t -> Mutator t
 -- (Param/Port)Assign: At global level or with enough info, change a named for a positional and the other way around
 -- EventPrim-> change edge and expression accordingly
 -- EventControl: at statement level, Deps <-> Expr
--- LoopStatement-> repeat-for, for-while, forever-for
--- Statement: Check ESA, if/case-loop
+-- Statement: Check ESA, if/case-loop, to for, to while, to repeat
 -- BlockDecl: At Block level, rename
 -- ModGenCondItem-> If-Case comversion, If transforms, Case-transforms, check ESA
 -- ModGenItem-> See ESA, gate conversion, always-initial forever, cond-loop
@@ -616,3 +615,149 @@ mutateV2005 = mutateWith _msV2005 >=> \(Verilog2005 m p c) ->
   Verilog2005 <$> mapM mutateMB m
     <*> (mapM mutatePB p >>= mutateList)
     <*> (mapM mutateCB c >>= mutateList)
+
+
+-- Actual mutations
+
+shuffleList :: IsList t => PrimMutation t
+shuffleList l = Just $ asks snd >>= \gen -> fromList <$> shuffle gen (toList l)
+
+mtmTo3 :: PureMutation (GenMinTypMax t)
+mtmTo3 x = case x of
+  MTMSingle e -> Just $ MTMFull e e e
+  _ -> Nothing
+
+mtmTo1 :: Eq t => PureMutation (GenMinTypMax t)
+mtmTo1 x = case x of
+  MTMFull e0 e1 e2 | e0 == e1 && e1 == e2 -> Just $ MTMSingle e0
+  _ -> Nothing
+
+evalNumberToNat :: Maybe Natural -> Bool -> Number -> Maybe Natural
+evalNumberToNat msz sn v = case v of
+  NBinary l -> case msz of
+    Nothing -> evalBinaryUnlimited l
+    Just sz -> evalBinary sn sz l >>= castToPos
+  NOctal l -> case msz of
+    Nothing -> evalOctalUnlimited l
+    Just sz -> evalOctal sn sz l >>= castToPos
+  NDecimal n -> case msz of
+    Nothing -> Just n
+    Just sz ->
+      if testBit n (fromEnum sz - 1) then Nothing else Just $ n .&. (bit (fromEnum sz - 1) - 1)
+  NHex l -> case msz of
+    Nothing -> evalHexadecimalUnlimited l
+    Just sz -> evalHexadecimal sn sz l >>= castToPos
+  _ -> Nothing
+  where castToPos n = if n < 0 then Nothing else Just $ fromInteger n
+
+primToNumIdent :: GenPrim HierIdent r a -> Maybe NumIdent
+primToNumIdent p = case p of
+  PrimReal r -> Just $ NIReal r
+  PrimNumber sz sn v -> NINumber <$> evalNumberToNat sz sn v
+  PrimIdent (HierIdent [] i) Nothing -> Just $ NIIdent i
+  PrimMinTypMax (MTMSingle (ExprPrim p))) -> aux p
+  _ -> Nothing
+
+numIdentToPrim :: NumIdent -> GenPrim HierIdent r a
+numIdentToPrim ni = case ni of
+  NIReal r -> PrimReal r
+  NINumber n -> PrimNumber Nothing False $ NDecimal n
+  NIIdent i -> PrimIdent (HierIdent [] i) Nothing
+
+delay1ToBase :: PureMutation Delay1
+delay1ToBase x = case x of
+  D11 (MTMSingle (Expr (ExprPrim p))) -> D1Base <$> primToNumIdent p
+  _ -> Nothing
+
+delay1To1 :: PureMutation Delay1
+delay1To1 x = case x of
+  D1Base ni -> Just $ D11 $ MTMSingle $ Expr $ ExprPrim $ numIdentToPrim ni
+  _ -> Nothing
+
+delay2ToBase :: PureMutation Delay2
+delay2ToBase x = case x of
+  D21 (MTMSingle (Expr (ExprPrim p))) -> D2Base <$> primToNumIdent p
+  D22 (MTMSingle (Expr (ExprPrim p1))) (MTMSingle (Expr (ExprPrim p2))) | p1 == p2 ->
+    D2Base <$> primToNumIdent p1
+  _ -> Nothing
+
+delay2To1 :: PureMutation Delay2
+delay2To1 x = case x of
+  D2Base ni -> Just $ D21 $ MTMSingle $ Expr $ ExprPrim $ numIdentToPrim ni
+  D22 mtm1 mtm2 | mtm1 == mtm2 -> Just $ D21 mtm1
+  _ -> Nothing
+
+delay2To2 :: PureMutation Delay2
+delay2To2 x = case x of
+  D2Base ni -> let x = MTMSingle $ Expr $ ExprPrim $ numIdentToPrim ni in Just $ D22 x x
+  D21 mtm -> Just $ D22 mtm mtm
+  _ -> Nothing
+
+delay3ToBase :: PureMutation Delay3
+delay3ToBase x = case x of
+  D31 (MTMSingle (Expr (ExprPrim p))) -> D3Base <$> primToNumIdent p
+  D32 (MTMSingle (Expr (ExprPrim p1))) (MTMSingle (Expr (ExprPrim p2))) | p1 == p2 ->
+    D3Base <$> primToNumIdent p1
+  D32
+    (MTMSingle (Expr (ExprPrim p1)))
+    (MTMSingle (Expr (ExprPrim p2)))
+    (MTMSingle (Expr (ExprPrim p3)))
+    | p1 == p2 && p2 == p3 -> D3Base <$> primToNumIdent p1
+  _ -> Nothing
+
+delay3To1 :: PureMutation Delay3
+delay3To1 x = case x of
+  D3Base ni -> Just $ D31 $ MTMSingle $ Expr $ ExprPrim $ numIdentToPrim ni
+  D32 mtm1 mtm2 | mtm1 == mtm2 -> Just $ D31 mtm1
+  D33 mtm1 mtm2 mtm3 | mtm1 == mtm2 && mtm2 == mtm3 -> Just $ D31 mtm1
+  _ -> Nothing
+
+delay3To2 :: PureMutation Delay3
+delay3To2 x = case x of
+  D3Base ni -> let x = MTMSingle $ Expr $ ExprPrim $ numIdentToPrim ni in Just $ D32 x x
+  D31 mtm -> Just $ D32 mtm mtm
+  D33 mtm1 mtm2 mtm3 | mtm1 == mtm2 && mtm2 == mtm3 -> Just $ D32 mtm1 mtm1
+  _ -> Nothing
+
+delay3To3 :: PureMutation Delay3
+delay3To3 x = case x of
+  D3Base ni -> let x = MTMSingle $ Expr $ ExprPrim $ numIdentToPrim ni in Just $ D33 x x x
+  D31 mtm -> Just $ D33 mtm mtm mtm
+  D32 mtm1 mtm2 | mtm1 == mtm2 -> Just $ D33 mtm1 mtm1 mtm1
+  _ -> Nothing
+
+-- TODO NEXT: Use constant eval self-determined
+loopForever :: PureMutation LoopStatement
+loopForever x = case x of
+  LSWhile (Expr e) | exprZOX e == Just ZOXO -> Just $ LSForever
+  _ -> Nothing
+
+loopRepeat :: PrimMutation LoopStatement
+loopRepeat x = case x of
+  LSWhile (Expr e) | maybe False isZOXZX (exprZOX e) -> Just $ LSRepeat $ Expr e -- OR 0 OR Z OR X
+  _ -> Nothing
+
+loopWhile :: PrimMutation LoopStatement
+loopWhile x = case x of
+  LSForever -> Just $ LSWhile $ Expr $ ExprPrim $ PrimNumber Nothing False $ NDecimal 1 -- Any nonfalse
+  LSRepeat (Expr e) | maybe False isZOXZX (isExprZOX e) -> Just $ LSWhile $ Expr e -- OR 0 OR Z OR X?
+  _ -> Nothing
+
+loopSForever :: PureMutation Statement
+loopSRepeat :: PureMutation Statement
+loopSWhile :: PureMutation Statement
+loopSFor :: PureMutation Statement
+loopFSForever :: PureMutation FStatement
+loopFSRepeat :: PureMutation FStatement
+loopFSWhile :: PureMutation FStatement
+loopFSFor :: PureMutation FStatement
+
+-- constToBin :: PureMutation (GenPrim i r a)
+-- constToOct :: PureMutation (GenPrim i r a)
+-- constToHex :: PureMutation (GenPrim i r a)
+-- constToDec :: PureMutation (GenPrim i r a)
+-- constToXZ :: PureMutation (GenPrim i r a)
+-- constToStr :: PureMutation (GenPrim i r a)
+-- constSplit :: PrimMutation (GenPrim i r a)
+-- commuteRel :: PureMutation (GenExpr i r a)
+-- reshapeCommAssoc :: PrimMutation (GenExpr i r a)
