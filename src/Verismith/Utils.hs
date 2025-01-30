@@ -1,4 +1,3 @@
--- |
 -- Module      : Verismith
 -- Description : Verismith
 -- Copyright   : (c) 2018-2023, Yann Herklotz
@@ -6,6 +5,8 @@
 -- Maintainer  : yann [at] yannherklotz [dot] com
 -- Stability   : experimental
 -- Portability : POSIX
+{-# LANGUAGE QuantifiedConstraints #-}
+
 module Verismith.Utils
   ( generateByteString,
     nonEmpty,
@@ -14,6 +15,8 @@ module Verismith.Utils
     foldrMapM1,
     mkpair,
     uncurry3,
+    nTimes,
+    Data1,
     safe,
     showT,
     showBS,
@@ -23,6 +26,9 @@ module Verismith.Utils
 where
 
 import Control.Applicative
+import Data.Data
+import Data.Functor.Identity (Identity (..))
+import Data.Functor.Compose (Compose (..))
 import Data.ByteString (ByteString, pack)
 import Data.ByteString.Builder (byteStringHex, toLazyByteString)
 import qualified Data.ByteString.Lazy as L
@@ -52,6 +58,14 @@ mkpair = liftA2 (,)
 
 uncurry3 :: (a -> b -> c -> d) -> (a, b, c) -> d
 uncurry3 f (a, b, c) = f a b c
+
+nTimes :: (Num n, Eq n) => (a -> a) -> a -> n -> a
+nTimes f x n = if n == 0 then x else f $ nTimes f x $ n - 1
+
+class (Typeable f, forall a. Data a => Data (f a)) => Data1 f
+instance Data1 NonEmpty
+instance Data1 Identity
+instance (Data1 f, Data1 g) => Data1 (Compose f g)
 
 generateByteString :: (Maybe Int) -> Int -> Int -> IO [ByteString]
 generateByteString mseed size n = do

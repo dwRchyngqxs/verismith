@@ -224,9 +224,9 @@ prettyAttr :: Attributes -> Print
 prettyAttr = pl (<=>) $ nonEmpty (pure mempty) $ fmap (\x -> group $ "(* " <> fst x <=> "*)") . cslid1 pa
   where
     pa (Attribute i e) = maybe (prettyBS i) (liftA2 prettyEq (rawId $ Identifier i) . pca) e
-    pca = prettyGExpr prettyIdent (pm prettyCRangeExpr) (const $ pure mempty) 12
+    pca = prettyExpr prettyIdent (pm prettyCRangeExpr) (const $ pure mempty) 12
 
-prettyHierIdent :: PrettyIdent HierIdent
+prettyHierIdent :: PrettyIdent (HierIdent CExpr)
 prettyHierIdent (HierIdent p i) = do
   (ii, s) <- prettyIdent i
   iii <- foldrM (\x acc -> (\d -> d <> dot <> acc) <$> phId x) ii p
@@ -240,7 +240,7 @@ prettyDot1Ident (Dot1Ident mh t) = do
   (i, s) <- prettyIdent t
   case mh of Nothing -> return (i, s); Just h -> (\ft -> (ft <> dot <> i, s)) <$> padj prettyBS h
 
-prettySpecTerm :: PrettyIdent SpecTerm
+prettySpecTerm :: PrettyIdent (SpecTerm CExpr)
 prettySpecTerm (SpecTerm i r) = pm prettyCRangeExpr r >>= \d -> padjWith prettyIdent d i
 
 prettyNumber :: Number -> Doc
@@ -257,28 +257,28 @@ prettyNumIdent x = case x of
   NIReal r -> mkid $ raw r
   NINumber n -> mkid $ viaShow n
 
-prettyPrim :: PrettyIdent i -> (r -> Print) -> (a -> Print) -> PrettyIdent (GenPrim i r a)
+prettyPrim :: PrettyIdent i -> (r -> Print) -> (a -> Print) -> PrettyIdent (Prim i r a)
 prettyPrim ppid ppr ppa x = case x of
-  PrimNumber Nothing True (NDecimal i) -> mkid $ viaShow i
+  PrimNumber 0 True (NDecimal i) -> mkid $ viaShow i
   PrimNumber w b n ->
     mkid $
       nest $
-        (case w of Nothing -> mempty; Just ww -> viaShow ww <> softline)
+        (if w == 0 then mempty else viaShow w <> softline)
           <> group ((if b then "'s" else squote) <> prettyNumber n)
   PrimReal r -> mkid $ raw r
   PrimIdent i r -> ppr r >>= \rng -> first nest <$> padjWith ppid (group rng) i
   PrimConcat l -> bcslid1 pexpr l >>= mkid
   PrimMultConcat e l ->
-    liftA2 (<>) (gpadj (prettyGExpr prettyIdent (pm prettyCRangeExpr) ppa 12) e) (bcslid1 pexpr l)
+    liftA2 (<>) (gpadj (prettyExpr prettyIdent (pm prettyCRangeExpr) ppa 12) e) (bcslid1 pexpr l)
       >>= mkid . brc . nest
   PrimFun i a l -> do
     dat <- ppa a
     darg <- pcslid pexpr l
     (if nullDoc dat then padjWith else pspWith) ppid (dat <?=> darg) i
   PrimSysFun i l -> pcslid pexpr l >>= mkid . \x -> nest $ "$" <> raw i <> x
-  PrimMinTypMax m -> padj (prettyGMTM pexpr) m >>= mkid . par
+  PrimMinTypMax m -> padj (prettyMTM pexpr) m >>= mkid . par
   PrimString x -> mkid $ "\"" <> raw x <> "\""
-  where pexpr = prettyGExpr ppid ppr ppa 12
+  where pexpr = prettyExpr ppid ppr ppa 12
 
 preclevel :: BinaryOperator -> Int
 preclevel b = case b of
@@ -307,8 +307,8 @@ preclevel b = case b of
   BinLAnd -> 10
   BinLOr -> 11
 
-prettyGExpr :: PrettyIdent i -> (r -> Print) -> (a -> Print) -> Int -> PrettyIdent (GenExpr i r a)
-prettyGExpr ppid ppr ppa l e = case e of
+prettyExpr :: PrettyIdent i -> (r -> Print) -> (a -> Print) -> Int -> PrettyIdent (Expr i r a)
+prettyExpr ppid ppr ppa l e = case e of
   ExprPrim e -> first group <$> prettyPrim ppid ppr ppa e
   ExprUnOp op a e -> do
     da <- ppa a
@@ -333,64 +333,64 @@ prettyGExpr ppid ppr ppa l e = case e of
       pp = first (\x -> nest $ group (dc <=> nest ("?" <?+> da)) <=> group (dt <=> colon <+> x)) df
     if l < 12 then mkid $ gpar $ uncurry (<>) pp else return pp
   where
-    pexpr = prettyGExpr ppid ppr ppa
+    pexpr = prettyExpr ppid ppr ppa
     psexpr n e = fst <$> pexpr n e
 
-prettyExpr :: PrettyIdent Expr
-prettyExpr (Expr e) = prettyGExpr prettyHierIdent (pm prettyDimRange) prettyAttr 12 e
+prettyNExpr :: PrettyIdent NExpr
+prettyNExpr (NExpr e) = prettyExpr prettyHierIdent (pm prettyNDimRange) prettyAttr 12 e
 
 prettyCExpr :: PrettyIdent CExpr
-prettyCExpr (CExpr e) = prettyGExpr prettyIdent (pm prettyCRangeExpr) prettyAttr 12 e
+prettyCExpr (CExpr e) = prettyExpr prettyIdent (pm prettyCRangeExpr) prettyAttr 12 e
 
-prettyGMTM :: PrettyIdent et -> PrettyIdent (GenMinTypMax et)
-prettyGMTM pp x = case x of
+prettyMTM :: PrettyIdent et -> PrettyIdent (MinTypMax et)
+prettyMTM pp x = case x of
   MTMSingle e -> pp e
   MTMFull l t h -> do
     mn <- gpadj pp l
     mt <- gpadj pp t
     first (\mx -> mn <> colon <-> mt <> colon <-> group mx) <$> pp h
 
-prettyMTM :: PrettyIdent MinTypMax
-prettyMTM = prettyGMTM prettyExpr
+prettyNMTM :: PrettyIdent (MinTypMax NExpr)
+prettyNMTM = prettyMTM prettyNExpr
 
-prettyCMTM :: PrettyIdent CMinTypMax
-prettyCMTM = prettyGMTM prettyCExpr
+prettyCMTM :: PrettyIdent (MinTypMax CExpr)
+prettyCMTM = prettyMTM prettyCExpr
 
-prettyRange2 :: Range2 -> Print
+prettyRange2 :: Range2 CExpr -> Print
 prettyRange2 (Range2 m l) = do
   mx <- gpadj prettyCExpr m
   mn <- gpadj prettyCExpr l
   return $ brk $ mx <> colon <-> mn
 
-prettyR2s :: [Range2] -> Print
+prettyR2s :: [Range2 CExpr] -> Print
 prettyR2s = pl (</>) $ fmap group . prettyRange2
 
-prettyRangeExpr :: PrettyIdent e -> GenRangeExpr e -> Print
+prettyRangeExpr :: PrettyIdent e -> RangeExpr e CExpr -> Print
 prettyRangeExpr pp x = case x of
-  GRESingle r -> brk <$> padj pp r
-  GREPair r2 -> prettyRange2 r2
-  GREBaseOff b mp o -> do
+  RESingle r -> brk <$> padj pp r
+  REPair r2 -> prettyRange2 r2
+  REBaseOff b mp o -> do
     base <- gpadj pp b
     off <- gpadj prettyCExpr o
     return $ brk $ base <> (if mp then "-" else "+") <> colon <-> off
 
-prettyCRangeExpr :: CRangeExpr -> Print
+prettyCRangeExpr :: RangeExpr CExpr CExpr -> Print
 prettyCRangeExpr = prettyRangeExpr prettyCExpr
 
-prettyGDR :: PrettyIdent e -> GenDimRange e -> Print
-prettyGDR pp (GenDimRange d r) =
+prettyDimRange :: PrettyIdent e -> DimRange e CExpr -> Print
+prettyDimRange pp (DimRange d r) =
   foldr (liftA2 ((</>) . group . brk) . padj pp) (group <$> prettyRangeExpr pp r) d
 
-prettyDimRange :: DimRange -> Print
-prettyDimRange = prettyGDR prettyExpr
+prettyNDimRange :: DimRange NExpr CExpr -> Print
+prettyNDimRange = prettyDimRange prettyNExpr
 
-prettyCDimRange :: CDimRange -> Print
-prettyCDimRange = prettyGDR prettyCExpr
+prettyCDimRange :: DimRange CExpr CExpr -> Print
+prettyCDimRange = prettyDimRange prettyCExpr
 
-prettySignRange :: SignRange -> Print
+prettySignRange :: SignRange CExpr -> Print
 prettySignRange (SignRange s r) = (pift "signed" s <?=>) <$> pm (fmap group . prettyRange2) r
 
-prettyComType :: (d -> Doc) -> ComType d -> Print
+prettyComType :: (d -> Doc) -> ComType d CExpr -> Print
 prettyComType f x = case x of
   CTAbstract t -> pure $ viaShow t
   CTConcrete e sr -> group . (f e <?=>) <$> prettySignRange sr
@@ -402,58 +402,60 @@ prettyDriveStrength x = case x of
   DSHighZ False s -> par $ "highz0" </> comma <+> viaShow s <> "1"
   DSHighZ True s -> par $ viaShow s <> "0" </> comma <+> "highz1"
 
-prettyDelay3 :: PrettyIdent Delay3
+prettyDelay3 :: PrettyIdent (Delay3 NExpr)
 prettyDelay3 x =
   first ("#" <>) <$> case x of
     D3Base ni -> prettyNumIdent ni
-    D31 m -> padj prettyMTM m >>= mkid . par
+    D31 m -> padj prettyNMTM m >>= mkid . par
     D32 m1 m2 -> do
-      d1 <- ngpadj prettyMTM m1
-      d2 <- ngpadj prettyMTM m2
+      d1 <- ngpadj prettyNMTM m1
+      d2 <- ngpadj prettyNMTM m2
       mkid $ par $ d1 <.> d2
     D33 m1 m2 m3 -> do
-      d1 <- ngpadj prettyMTM m1
-      d2 <- ngpadj prettyMTM m2
-      d3 <- ngpadj prettyMTM m3
+      d1 <- ngpadj prettyNMTM m1
+      d2 <- ngpadj prettyNMTM m2
+      d3 <- ngpadj prettyNMTM m3
       mkid $ par $ d1 <.> d2 <.> d3
 
-prettyDelay2 :: PrettyIdent Delay2
+prettyDelay2 :: PrettyIdent (Delay2 NExpr)
 prettyDelay2 x =
   first ("#" <>) <$> case x of
     D2Base ni -> prettyNumIdent ni
-    D21 m -> padj prettyMTM m >>= mkid . par
+    D21 m -> padj prettyNMTM m >>= mkid . par
     D22 m1 m2 -> do
-      d1 <- ngpadj prettyMTM m1
-      d2 <- ngpadj prettyMTM m2
+      d1 <- ngpadj prettyNMTM m1
+      d2 <- ngpadj prettyNMTM m2
       mkid $ par $ d1 <.> d2
 
-prettyDelay1 :: PrettyIdent Delay1
+prettyDelay1 :: PrettyIdent (Delay1 NExpr)
 prettyDelay1 x =
   first ("#" <>) <$> case x of
     D1Base ni -> prettyNumIdent ni
-    D11 m -> padj prettyMTM m >>= mkid . par
+    D11 m -> padj prettyNMTM m >>= mkid . par
 
-prettyLValue :: (dr -> Print) -> PrettyIdent (LValue dr)
+prettyLValue :: PrettyIdent e -> PrettyIdent (LValue e CExpr)
 prettyLValue f x = case x of
-  LVSingle hi r -> pm (fmap group . f) r >>= \rng -> first nest <$> padjWith prettyHierIdent rng hi
-  LVConcat l -> bcslid1 (prettyLValue f) l >>= mkid 
+  LVSingle hi r -> do
+    rng <- pm (fmap group . prettyDimRange f) r
+    first nest <$> padjWith prettyHierIdent rng hi
+  LVConcat l -> bcslid1 (prettyLValue f) l >>= mkid
 
-prettyNetLV :: PrettyIdent NetLValue
-prettyNetLV = prettyLValue prettyCDimRange
+prettyNetLV :: PrettyIdent (LValue CExpr CExpr)
+prettyNetLV = prettyLValue prettyCExpr
 
-prettyVarLV :: PrettyIdent VarLValue
-prettyVarLV = prettyLValue prettyDimRange
+prettyVarLV :: PrettyIdent (LValue NExpr CExpr)
+prettyVarLV = prettyLValue prettyNExpr
 
-prettyAssign :: (dr -> Print) -> PrettyIdent (Assign dr)
-prettyAssign f (Assign l e) = liftA2 (prettyEq . fst) (prettyLValue f l) (prettyExpr e)
+prettyAssign :: PrettyIdent e -> PrettyIdent (Assign e CExpr NExpr)
+prettyAssign f (Assign l e) = liftA2 (prettyEq . fst) (prettyLValue f l) (prettyNExpr e)
 
-prettyNetAssign :: PrettyIdent NetAssign
-prettyNetAssign = prettyAssign prettyCDimRange
+prettyNetAssign :: PrettyIdent (Assign CExpr CExpr NExpr)
+prettyNetAssign = prettyAssign prettyCExpr
 
-prettyVarAssign :: PrettyIdent VarAssign
-prettyVarAssign = prettyAssign prettyDimRange
+prettyVarAssign :: PrettyIdent (Assign NExpr CExpr NExpr)
+prettyVarAssign = prettyAssign prettyNExpr
 
-prettyEventControl :: PrettyIdent EventControl
+prettyEventControl :: PrettyIdent (EventControl NExpr CExpr)
 prettyEventControl x =
   first ("@" <>) <$> case x of
     ECDeps -> pure ("*", newline)
@@ -462,7 +464,7 @@ prettyEventControl x =
   where
     pEP (EventPrim p e) =
       first (ng . ((case p of EPAny -> mempty; EPPos -> "posedge"; EPNeg -> "negedge") <?=>))
-        <$> prettyExpr e
+        <$> prettyNExpr e
 
 prettyEdgeDesc :: EdgeDesc -> Print
 prettyEdgeDesc x = do
@@ -485,7 +487,7 @@ prettyEdgeDesc x = do
           5 -> if zx then "z1" else "x1"
         else id
 
-prettyXparam :: B.ByteString -> ComType () -> NonEmpty (Identified CMinTypMax) -> Print
+prettyXparam :: B.ByteString -> ComType () CExpr -> NonEmpty (Identified (MinTypMax CExpr)) -> Print
 prettyXparam pre t l = do
   dt <- prettyComType (const mempty) t
   prettyItemsid
@@ -493,21 +495,21 @@ prettyXparam pre t l = do
     (\(Identified i v) -> liftA2 prettyEq (rawId i) (prettyCMTM v))
     l
 
-type EDI = Either [Range2] CExpr
+type EDI = Either [Range2 CExpr] CExpr
 
 data AllBlockDecl
-  = ABDReg SignRange (NonEmpty (Identified EDI))
+  = ABDReg (SignRange CExpr) (NonEmpty (Identified EDI))
   | ABDInt (NonEmpty (Identified EDI))
   | ABDReal (NonEmpty (Identified EDI))
   | ABDTime (NonEmpty (Identified EDI))
   | ABDRealTime (NonEmpty (Identified EDI))
-  | ABDEvent (NonEmpty (Identified [Range2]))
-  | ABDLocalParam (ComType ()) (NonEmpty (Identified CMinTypMax))
-  | ABDParameter (ComType ()) (NonEmpty (Identified CMinTypMax))
-  | ABDPort Dir (ComType Bool) (NonEmpty Identifier)
+  | ABDEvent (NonEmpty (Identified [Range2 CExpr]))
+  | ABDLocalParam (ComType () CExpr) (NonEmpty (Identified (MinTypMax CExpr)))
+  | ABDParameter (ComType () CExpr) (NonEmpty (Identified (MinTypMax CExpr)))
+  | ABDPort Dir (ComType Bool CExpr) (NonEmpty Identifier)
 
 fromBlockDecl ::
-  (forall x. f x -> NonEmpty (Identified x)) -> (t -> EDI) -> BlockDecl f t -> AllBlockDecl
+  (forall x. f x -> NonEmpty (Identified x)) -> (t -> EDI) -> BlockDecl f t CExpr -> AllBlockDecl
 fromBlockDecl ff ft bd = case bd of
   BDReg sr x -> convt (ABDReg sr) x
   BDInt x -> convt ABDInt x
@@ -520,7 +522,7 @@ fromBlockDecl ff ft bd = case bd of
     conv c = c . ff
     convt c = c . NE.map (\(Identified i x) -> Identified i $ ft x) . ff
 
-fromStdBlockDecl :: AttrIded StdBlockDecl -> Attributed AllBlockDecl
+fromStdBlockDecl :: AttrIded (StdBlockDecl CExpr) -> Attributed AllBlockDecl
 fromStdBlockDecl (AttrIded a i sbd) =
   Attributed a $ case sbd of
     SBDParameter (Parameter t v) -> ABDParameter t [Identified i v]
@@ -566,10 +568,10 @@ prettyAllBlockDecls =
         _ -> Nothing
       )
 
-prettyStdBlockDecls :: [AttrIded StdBlockDecl] -> Print
+prettyStdBlockDecls :: [AttrIded (StdBlockDecl CExpr)] -> Print
 prettyStdBlockDecls = prettyAllBlockDecls . map fromStdBlockDecl
 
-prettyTFBlockDecls :: (d -> Dir) -> [AttrIded (TFBlockDecl d)] -> Print
+prettyTFBlockDecls :: (d -> Dir) -> [AttrIded (TFBlockDecl d CExpr)] -> Print
 prettyTFBlockDecls f =
   prettyAllBlockDecls
     . map
@@ -578,28 +580,28 @@ prettyTFBlockDecls f =
           TFBDStd sbd -> fromStdBlockDecl (AttrIded a i sbd)
       )
 
-prettyStatement :: Bool -> Statement -> Print
+prettyStatement :: Bool -> Statement NExpr CExpr -> Print
 prettyStatement protect x = case x of
   SBlockAssign b (Assign lv v) dec -> do
     delev <- case dec of
       Nothing -> pure mempty
       Just (DECRepeat e ev) -> do
-        ex <- padj prettyExpr e
+        ex <- padj prettyNExpr e
         evc <- prettyEventControl ev
         return $ group ("repeat" <=> gpar ex) <=> fst evc
       Just (DECDelay d) -> fst <$> prettyDelay1 d
       Just (DECEvent e) -> fst <$> prettyEventControl e
     ll <- prettyVarLV lv
-    rr <- gpadj prettyExpr v
+    rr <- gpadj prettyNExpr v
     return $ ng $ group (fst ll) <=> group (piff langle b <> equals <+> delev <?=> rr) <> semi
   SCase zox e b s -> do
-    ex <- padj prettyExpr e
+    ex <- padj prettyNExpr e
     dft <- case s of
       Attributed [] Nothing -> pure mempty
       _ -> nest . ("default:" <=>) <$> prettyMybStmt False s
     let
       pci (CaseItem p v) = do
-        pat <- gpadj (cslid1 prettyExpr) p
+        pat <- gpadj (cslid1 prettyNExpr) p
         branch <- prettyMybStmt False v
         return $ pat <> colon <+> ng branch
     body <- pl (<#>) pci b
@@ -609,7 +611,7 @@ prettyStatement protect x = case x of
         "endcase"
         (body <?#> dft)
   SIf c t f -> do
-    head <- ("if" <=>) . gpar <$> padj prettyExpr c
+    head <- ("if" <=>) . gpar <$> padj prettyNExpr c
     case f of
       Attributed [] Nothing | protect == False -> (ng head <>) <$> prettyRMybStmt False t
       Attributed [] (Just x@(SBlock _ _ _)) -> do
@@ -629,16 +631,16 @@ prettyStatement protect x = case x of
   SDisable hi -> (\x -> group $ "disable" <=> x <> semi) <$> padj prettyHierIdent hi
   SEventTrigger hi e -> do
     dhi <- padj prettyHierIdent hi
-    dim <- pl (</>) (fmap (group . brk) . padj prettyExpr) e
+    dim <- pl (</>) (fmap (group . brk) . padj prettyNExpr) e
     return $ group $ "->" <+> dhi <> dim <> semi
   SLoop ls s -> do
     head <- case ls of
       LSForever -> pure "forever"
-      LSRepeat e -> ("repeat" <=>) . gpar <$> padj prettyExpr e
-      LSWhile e -> ("while" <=>) . gpar <$> padj prettyExpr e
+      LSRepeat e -> ("repeat" <=>) . gpar <$> padj prettyNExpr e
+      LSWhile e -> ("while" <=>) . gpar <$> padj prettyNExpr e
       LSFor i c u -> do
         di <- gpadj prettyVarAssign i
-        dc <- gpadj prettyExpr c 
+        dc <- gpadj prettyNExpr c 
         du <- gpadj prettyVarAssign u
         return $ "for" <=> gpar (di <> semi <+> dc <> semi <+> du)
     nest . (ng head <=>) <$> prettyAttrStmt protect s
@@ -658,28 +660,28 @@ prettyStatement protect x = case x of
       (if ps then "join" else "end")
       <$> liftA2 (<?#>) (pm (prettyStdBlockDecls . snd) h) (pl (<#>) (prettyAttrStmt False) s)
   SSysTaskEnable s a ->
-    (\x -> ng ("$" <> raw s <> x) <> semi) <$> pcslid (maybe (mkid mempty) prettyExpr) a
+    (\x -> ng ("$" <> raw s <> x) <> semi) <$> pcslid (maybe (mkid mempty) prettyNExpr) a
   STaskEnable hi a -> do
     dhi <- padj prettyHierIdent hi
-    args <- pcslid prettyExpr a
+    args <- pcslid prettyNExpr a
     return $ group (dhi <> args) <> semi
-  SWait e s -> padj prettyExpr e >>= \x -> (ng ("wait" <=> gpar x) <>) <$> prettyRMybStmt protect s
+  SWait e s -> padj prettyNExpr e >>= \x -> (ng ("wait" <=> gpar x) <>) <$> prettyRMybStmt protect s
 
-prettyAttrStmt :: Bool -> AttrStmt -> Print
+prettyAttrStmt :: Bool -> Attributed (Statement NExpr CExpr) -> Print
 prettyAttrStmt protect (Attributed a s) = prettyAttrThen a $ nest <$> prettyStatement protect s
 
-prettyMybStmt :: Bool -> MybStmt -> Print
+prettyMybStmt :: Bool -> Attributed (Maybe (Statement NExpr CExpr)) -> Print
 prettyMybStmt protect (Attributed a s) = case s of
   Nothing -> (<> semi) <$> prettyAttr a
   Just s -> prettyAttrThen a $ prettyStatement protect s
 
-prettyRMybStmt :: Bool -> MybStmt -> Print
+prettyRMybStmt :: Bool -> Attributed (Maybe (Statement NExpr CExpr)) -> Print
 prettyRMybStmt protect (Attributed a s) = do
   da <- case a of {[] -> pure mempty; _ -> (newline <>) <$> prettyAttr a}
   ds <- maybe (pure semi) (fmap (newline <>) . prettyStatement protect) s
   return $ da <> ds
 
-prettyPortAssign :: PortAssign -> Print
+prettyPortAssign :: PortAssign NExpr -> Print
 prettyPortAssign x = case x of
   PortPositional l ->
     cslid
@@ -688,7 +690,7 @@ prettyPortAssign x = case x of
       ( \(Attributed a e) -> case e of
           Nothing -> prettyAttr a >>= mkid
           Just e -> do
-            (i, s) <- prettyExpr e
+            (i, s) <- prettyNExpr e
             d <- prettyAttrng a i
             return (group d, s)
       )
@@ -699,12 +701,108 @@ prettyPortAssign x = case x of
       softline
       ( \(AttrIded a i e) -> do
           s <- padj prettyIdent i
-          ex <- pm (padj prettyExpr) e
+          ex <- pm (padj prettyNExpr) e
           group <$> prettyAttrng a (dot <> s <> gpar ex)
       )
       l
 
-prettyModGenSingleItem :: ModGenSingleItem -> Bool -> Print
+prettyGate :: Gate NonEmpty NExpr CExpr -> Print
+prettyGate x = case x of
+  GCMos r d3 l -> do
+    d <- pm (fmap fst . prettyDelay3) d3
+    prettyItems
+      (pift "r" r <> "cmos" <?=> d)
+      ( \(GICMos n lv inp nc pc) -> do
+          i <- pm pname n
+          dlv <- ngpadj prettyNetLV lv
+          di <- ngpadj prettyNExpr inp
+          dn <- ngpadj prettyNExpr nc
+          dp <- ngpadj prettyNExpr pc
+          return $ i <> gpar (dlv <.> di <.> dn <.> dp)
+      )
+      l
+  GEnable r oz ds d3 l -> do
+    d <- pm (fmap fst . prettyDelay3) d3
+    prettyItems
+      ( (if r then "not" else "buf") <> "if" <> (if oz then "1" else "0")
+          <?=> prettyDriveStrength ds
+          <?=> d
+      )
+      ( \(GIEnable n lv inp e) -> do
+          i <- pm pname n
+          dlv <- ngpadj prettyNetLV lv
+          di <- ngpadj prettyNExpr inp
+          de <- ngpadj prettyNExpr e
+          return $ i <> gpar (dlv <.> di <.> de)
+      )
+      l
+  GMos r np d3 l -> do
+    d <- pm (fmap fst . prettyDelay3) d3
+    prettyItems
+      (pift "r" r <> (if np then "n" else "p") <> "mos" <?=> d)
+      ( \(GIMos n lv inp e) -> do
+          i <- pm pname n
+          dlv <- ngpadj prettyNetLV lv
+          di <- ngpadj prettyNExpr inp
+          de <- ngpadj prettyNExpr e
+          return $ i <> gpar (dlv <.> di <.> de)
+      )
+      l
+  GNIn nin n ds d2 l -> do
+    d <- pm (fmap fst . prettyDelay2) d2
+    prettyItems
+      ( (if nin == NITXor then "x" <> pift "n" n <> "or" else pift "n" n <> viaShow nin)
+          <?=> prettyDriveStrength ds
+          <?=> d
+      )
+      ( \(GINIn n lv inp) -> do
+          i <- pm pname n
+          dlv <- ngpadj prettyNetLV lv
+          di <- padj (cslid1 $ mkng prettyNExpr) inp
+          return $ i <> gpar (dlv <.> di)
+      )
+      l
+  GNOut r ds d2 l -> do
+    d <- pm (fmap fst . prettyDelay2) d2
+    prettyItems
+      ((if r then "not" else "buf") <?=> prettyDriveStrength ds <?=> d)
+      ( \(GINOut n lv inp) -> do
+          i <- pm pname n
+          dlv <- padj (cslid1 $ mkng prettyNetLV) lv
+          di <- ngpadj prettyNExpr inp
+          return $ i <> gpar (dlv <.> di)
+      )
+      l
+  GPassEn r oz d2 l -> do
+    d <- pm (fmap fst . prettyDelay2) d2
+    prettyItems
+      (pift "r" r <> "tranif" <> (if oz then "1" else "0") <?=> d)
+      ( \(GIPassEn n ll rl e) -> do
+          i <- pm pname n
+          dll <- ngpadj prettyNetLV ll
+          drl <- ngpadj prettyNetLV rl
+          de <- ngpadj prettyNExpr e
+          return $ i <> gpar (dll <.> drl <.> de)
+      )
+      l
+  GPass r l ->
+    prettyItems
+      (pift "r" r <> "tran")
+      ( \(GIPass n ll rl) -> do
+          i <- pm pname n
+          dll <- ngpadj prettyNetLV ll
+          drl <- ngpadj prettyNetLV rl
+          return $ i <> gpar (dll <.> drl))
+      l
+  GPull ud ds l ->
+    prettyItems
+      ("pull" <> (if ud then "up" else "down") <?=> prettyDriveStrength ds)
+      (\(GIPull n lv) -> pm pname n >>= \i -> (i <>) . gpar <$> gpadj prettyNetLV lv)
+      l
+  where
+    pname (InstanceName i r) = pm prettyRange2 r >>= \rng -> gpadj (padjWith prettyIdent rng) i
+
+prettyModGenSingleItem :: ModGenSingleItem NExpr CExpr -> Bool -> Print
 prettyModGenSingleItem x protect = case x of
   MGINetInit nt ds np l ->
     com np >>= \d -> prettyItemsid (viaShow nt <?=> prettyDriveStrength ds <?=> d) pide l
@@ -739,97 +837,7 @@ prettyModGenSingleItem x protect = case x of
   MGIContAss ds d3 l -> do
     d <- pm (fmap fst . prettyDelay3) d3
     prettyItemsid ("assign" <?=> prettyDriveStrength ds <?=> d) prettyNetAssign l
-  MGICMos r d3 l -> do
-    d <- pm (fmap fst . prettyDelay3) d3
-    prettyItems
-      (pift "r" r <> "cmos" <?=> d)
-      ( \(GICMos n lv inp nc pc) -> do
-          i <- pm pname n
-          dlv <- ngpadj prettyNetLV lv
-          di <- ngpadj prettyExpr inp
-          dn <- ngpadj prettyExpr nc
-          dp <- ngpadj prettyExpr pc
-          return $ i <> gpar (dlv <.> di <.> dn <.> dp)
-      )
-      l
-  MGIEnable r oz ds d3 l -> do
-    d <- pm (fmap fst . prettyDelay3) d3
-    prettyItems
-      ( (if r then "not" else "buf") <> "if" <> (if oz then "1" else "0")
-          <?=> prettyDriveStrength ds
-          <?=> d
-      )
-      ( \(GIEnable n lv inp e) -> do
-          i <- pm pname n
-          dlv <- ngpadj prettyNetLV lv
-          di <- ngpadj prettyExpr inp
-          de <- ngpadj prettyExpr e
-          return $ i <> gpar (dlv <.> di <.> de)
-      )
-      l
-  MGIMos r np d3 l -> do
-    d <- pm (fmap fst . prettyDelay3) d3
-    prettyItems
-      (pift "r" r <> (if np then "n" else "p") <> "mos" <?=> d)
-      ( \(GIMos n lv inp e) -> do
-          i <- pm pname n
-          dlv <- ngpadj prettyNetLV lv
-          di <- ngpadj prettyExpr inp
-          de <- ngpadj prettyExpr e
-          return $ i <> gpar (dlv <.> di <.> de)
-      )
-      l
-  MGINIn nin n ds d2 l -> do
-    d <- pm (fmap fst . prettyDelay2) d2
-    prettyItems
-      ( (if nin == NITXor then "x" <> pift "n" n <> "or" else pift "n" n <> viaShow nin)
-          <?=> prettyDriveStrength ds
-          <?=> d
-      )
-      ( \(GINIn n lv inp) -> do
-          i <- pm pname n
-          dlv <- ngpadj prettyNetLV lv
-          di <- padj (cslid1 $ mkng prettyExpr) inp
-          return $ i <> gpar (dlv <.> di)
-      )
-      l
-  MGINOut r ds d2 l -> do
-    d <- pm (fmap fst . prettyDelay2) d2
-    prettyItems
-      ((if r then "not" else "buf") <?=> prettyDriveStrength ds <?=> d)
-      ( \(GINOut n lv inp) -> do
-          i <- pm pname n
-          dlv <- padj (cslid1 $ mkng prettyNetLV) lv
-          di <- ngpadj prettyExpr inp
-          return $ i <> gpar (dlv <.> di)
-      )
-      l
-  MGIPassEn r oz d2 l -> do
-    d <- pm (fmap fst . prettyDelay2) d2
-    prettyItems
-      (pift "r" r <> "tranif" <> (if oz then "1" else "0") <?=> d)
-      ( \(GIPassEn n ll rl e) -> do
-          i <- pm pname n
-          dll <- ngpadj prettyNetLV ll
-          drl <- ngpadj prettyNetLV rl
-          de <- ngpadj prettyExpr e
-          return $ i <> gpar (dll <.> drl <.> de)
-      )
-      l
-  MGIPass r l ->
-    prettyItems
-      (pift "r" r <> "tran")
-      ( \(GIPass n ll rl) -> do
-          i <- pm pname n
-          dll <- ngpadj prettyNetLV ll
-          drl <- ngpadj prettyNetLV rl
-          return $ i <> gpar (dll <.> drl))
-      l
-  MGIPull ud ds l ->
-    prettyItems
-      ("pull" <> (if ud then "up" else "down") <?=> prettyDriveStrength ds)
-      (\(GIPull n lv) -> pm pname n >>= \i -> (i <>) . gpar <$> gpadj prettyNetLV lv)
-      l
+  MGIGate g -> prettyGate g
   MGIUDPInst kind ds d2 l -> do
     d <- pm (fmap fst . prettyDelay2) d2
     dk <- rawId kind
@@ -838,20 +846,20 @@ prettyModGenSingleItem x protect = case x of
       ( \(UDPInst n lv args) -> do
           i <- pm pname n
           dlv <- gpadj prettyNetLV lv
-          da <- padj (cslid1 $ mkg prettyExpr) args
+          da <- padj (cslid1 $ mkg prettyNExpr) args
           return $ i <> gpar (dlv <.> da)
       )
       l
   MGIModInst kind param l -> do
     dp <- case param of
-      ParamPositional l -> cslid ("#(" <> softspace) rparen (mkng prettyExpr) l
+      ParamPositional l -> cslid ("#(" <> softspace) rparen (mkng prettyNExpr) l
       ParamNamed l ->
         csl
           ("#(" <> softspace)
           (softline <> rparen)
           ( \(Identified i e) -> do
               s <- padj prettyIdent i
-              d <- pm (padj prettyMTM) e
+              d <- pm (padj prettyNMTM) e
               return $ ng $ dot <> s <> gpar d
           )
           l
@@ -863,16 +871,16 @@ prettyModGenSingleItem x protect = case x of
   MGIUnknownInst kind param l -> do
     dp <- case param of
       Nothing -> pure mempty
-      Just (Left e) -> ("#" <>) . par <$> padj prettyExpr e
+      Just (Left e) -> ("#" <>) . par <$> padj prettyNExpr e
       Just (Right (e0, e1)) ->
-        ("#" <>) . par <$> liftA2 (<.>) (gpadj prettyExpr e0) (gpadj prettyExpr e1)
+        ("#" <>) . par <$> liftA2 (<.>) (gpadj prettyNExpr e0) (gpadj prettyNExpr e1)
     dk <- rawId kind
     prettyItems
       (dk <?=> dp)
       ( \(UknInst n lv args) -> do
           i <- pname n
           dlv <- gpadj prettyNetLV lv
-          da <- padj (cslid1 $ mkg prettyExpr) args
+          da <- padj (cslid1 $ mkg prettyNExpr) args
           return $ i <> gpar (dlv <.> da)
       )
       l
@@ -892,7 +900,7 @@ prettyModGenSingleItem x protect = case x of
     pname (InstanceName i r) = pm prettyRange2 r >>= \rng -> gpadj (padjWith prettyIdent rng) i
     mauto b = pift "automatic" b
     pidd (NetDecl i d) = prettyR2s d >>= \dim -> padjWith prettyIdent dim i
-    pide (NetInit i e) = liftA2 prettyEq (rawId i) (prettyExpr e)
+    pide (NetInit i e) = liftA2 prettyEq (rawId i) (prettyNExpr e)
     com (NetProp b vs d3) = do
       let s = pift "signed" b
       dvs <- maybe
@@ -905,7 +913,7 @@ prettyModGenSingleItem x protect = case x of
       (dvs <?=>) <$> pm (fmap fst . prettyDelay3) d3
 
 -- | Nested conditionals with dangling else support
-prettyModGenCondItem :: ModGenCondItem -> Bool -> Print
+prettyModGenCondItem :: ModGenCondItem NExpr CExpr -> Bool -> Print
 prettyModGenCondItem ci protect = case ci of
   MGCIIf c t f -> do
     head <- ("if" <=>) . gpar <$> padj prettyCExpr c
@@ -933,7 +941,7 @@ prettyModGenCondItem ci protect = case ci of
         r -> (ng head <=>) <$> prettyGBlock i r
 
 -- | Generate block
-prettyGBlock :: Maybe Identifier -> [Attributed ModGenSingleItem] -> Print
+prettyGBlock :: Maybe Identifier -> [Attributed (ModGenSingleItem NExpr CExpr)] -> Print
 prettyGBlock i l = do
   bn <- pm (fmap (colon <=>) . rawId) i
   block ("begin" <> bn) "end"
@@ -942,10 +950,10 @@ prettyGBlock i l = do
       (\(Attributed a x) -> prettyAttrThen a $ prettyModGenSingleItem x False)
       l
 
-prettyGenerateBlock :: GenerateBlock -> Print
+prettyGenerateBlock :: GenerateBlock NExpr CExpr -> Print
 prettyGenerateBlock (GenerateBlock s x) = prettyGBlock s $ fromMGBlockedItem x
 
-prettySpecParams :: Maybe Range2 -> NonEmpty SpecParamDecl -> Print
+prettySpecParams :: Maybe (Range2 CExpr) -> NonEmpty (SpecParamDecl CExpr) -> Print
 prettySpecParams rng l = do
   dr <- pm prettyRange2 rng
   prettyItemsid
@@ -966,7 +974,7 @@ prettySpecParams rng l = do
       dout <- prettySpecTerm o
       return $ din <> "$" <> fst dout
 
-prettyPathDecl :: SpecPath -> Maybe Bool -> Maybe (Expr, Maybe Bool) -> Print
+prettyPathDecl :: SpecPath CExpr -> Maybe Bool -> Maybe (NExpr, Maybe Bool) -> Print
 prettyPathDecl p pol eds = do
   -- parallel or full, source(s), destination(s)
   (pf, (cin, _), cout) <- case p of
@@ -981,7 +989,7 @@ prettyPathDecl p pol eds = do
   (de, ed) <- case eds of
     Nothing -> pure (cout, mempty)
     Just (dst, me) -> do
-      d <- padj prettyExpr dst
+      d <- padj prettyNExpr dst
       return
         ( par $ cout <> po <> colon <+> d,
           maybe mempty (\e -> if e then "posedge" else "negedge") me
@@ -995,7 +1003,7 @@ prettyPathDecl p pol eds = do
     noedge = eds == Nothing
     fne = if noedge then uncurry (<>) else (<> newline) . fst
 
-prettySpecifyItem :: SpecifySingleItem -> Print
+prettySpecifyItem :: SpecifySingleItem NExpr CExpr MPExpr -> Print
 prettySpecifyItem x =
   nest <$> case x of
     SISpecParam r l -> prettySpecParams r l
@@ -1007,7 +1015,7 @@ prettySpecifyItem x =
       dmpc <- case mpc of
         MPCCond e ->
           group . ("if" <=>) . gpar
-            <$> padj (prettyGExpr prettyIdent (const $ pure mempty) prettyAttr 12) e
+            <$> padj (prettyExpr prettyIdent (const $ pure mempty) prettyAttr 12) e
         MPCAlways -> pure mempty
         MPCNone -> pure "ifnone"
       dpd <- prettyPathDecl p pol eds
@@ -1051,8 +1059,8 @@ prettySpecifyItem x =
     SINoChange re de so eo n -> do
       dre <- pTCE re
       dde <- pTCE de
-      dso <- ngpadj prettyMTM so
-      deo <- ngpadj prettyMTM eo
+      dso <- ngpadj prettyNMTM so
+      deo <- ngpadj prettyNMTM eo
       dn <- prid n
       return $ "$nochange" </> gpar (dre <.> dde <.> dso <.> deo <> dn) <> semi
   where
@@ -1060,12 +1068,12 @@ prettySpecifyItem x =
     toc = trailoptcat (<.>)
     prid = pm $ fmap (comma <+>) . padj prettyIdent
     pid = pm $ padj prettyIdent
-    pexpr = gpadj prettyExpr
+    pexpr = gpadj prettyNExpr
     pTCC st mbe = case mbe of
       Nothing -> gpadj prettySpecTerm st
       Just (b, e) -> do
         dst <- prettySpecTerm st
-        de <- gpadj prettyExpr e
+        de <- gpadj prettyNExpr e
         return $ group $ group (fst dst) <=> "&&&" <+> pift "~" b <?+> de
     pTCE (TimingCheckEvent ev st tc) = ng <$> liftA2 (<?=>) (pm prettyEdgeDesc ev) (pTCC st tc)
     pCTCE (ControlledTimingCheckEvent ev st tc) =
@@ -1084,8 +1092,8 @@ prettySpecifyItem x =
       dtcl0 <- pexpr tcl0
       dtcl1 <- pexpr tcl1
       dn <- pid n
-      dmsc <- pm (ngpadj prettyMTM) msc
-      dmtc <- pm (ngpadj prettyMTM) mtc
+      dmsc <- pm (ngpadj prettyNMTM) msc
+      dmtc <- pm (ngpadj prettyNMTM) mtc
       dmdr <- pIMTM mdr
       dmdd <- pIMTM mdd
       return $ gpar $ dre <.> dde <.> dtcl0 <.> toc [dtcl1, dn, dmsc, dmtc, dmdr, dmdd]
@@ -1098,14 +1106,14 @@ prettySpecifyItem x =
         [e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12]
 
 data ModuleItem'
-  = MI'MGI (Attributed ModGenSingleItem)
-  | MI'Port Attributes Dir SignRange (NonEmpty Identifier)
-  | MI'Parameter Attributes (ComType ()) (NonEmpty (Identified CMinTypMax))
-  | MI'GenReg [Attributed ModGenSingleItem]
-  | MI'SpecParam Attributes (Maybe Range2) (NonEmpty SpecParamDecl)
-  | MI'SpecBlock [SpecifySingleItem]
+  = MI'MGI (Attributed (ModGenSingleItem NExpr CExpr))
+  | MI'Port Attributes Dir (SignRange CExpr) (NonEmpty Identifier)
+  | MI'Parameter Attributes (ComType () CExpr) (NonEmpty (Identified (MinTypMax CExpr)))
+  | MI'GenReg [Attributed (ModGenSingleItem NExpr CExpr)]
+  | MI'SpecParam Attributes (Maybe (Range2 CExpr)) (NonEmpty (SpecParamDecl CExpr))
+  | MI'SpecBlock [SpecifySingleItem NExpr CExpr MPExpr]
 
-prettyModuleItems :: [ModuleItem] -> Print
+prettyModuleItems :: [ModuleItem NExpr CExpr MPExpr] -> Print
 prettyModuleItems =
   nonEmpty (pure mempty) $
     prettyregroup
@@ -1142,7 +1150,7 @@ prettyModuleItems =
         _ -> Nothing
       )
 
-prettyPortInter :: [Identified [Identified (Maybe CRangeExpr)]] -> Print
+prettyPortInter :: [Identified [Identified (Maybe (RangeExpr CExpr CExpr))]] -> Print
 prettyPortInter =
   cslid mempty mempty $
     \(Identified i@(Identifier ii) l) -> case l of
@@ -1156,13 +1164,14 @@ prettyPortInter =
             mkid $ ng $ dot <> di <> gpar de
   where
     pst (Identified i x) = prettySpecTerm $ SpecTerm i x
-    portexpr :: PrettyIdent [Identified (Maybe CRangeExpr)]
+    portexpr :: PrettyIdent [Identified (Maybe (RangeExpr CExpr CExpr))]
     portexpr l = case l of
       [] -> pure (mempty, mempty)
       [x] -> pst x
       _ -> cslid (lbrace <> softspace) rbrace pst l >>= mkid
 
-prettyModuleBlock :: LocalCompDir -> ModuleBlock -> Reader PrintingOpts (Doc, LocalCompDir)
+prettyModuleBlock ::
+  LocalCompDir -> ModuleBlock NExpr CExpr MPExpr -> Reader PrintingOpts (Doc, LocalCompDir)
 prettyModuleBlock (LocalCompDir ts c p dn) (ModuleBlock a mm i pi b mts mc mp mdn) = do
   head <- fpadj (group . ((if mm then "macromodule" else "module") <=>)) prettyIdent i
   ports <- prettyPortInter pi
@@ -1188,7 +1197,7 @@ prettyModuleBlock (LocalCompDir ts c p dn) (ModuleBlock a mm i pi b mts mc mp md
        in case v of 0 -> "1"; 1 -> "10"; 2 -> "100"
             <> case u of 0 -> "s"; -1 -> "ms"; -2 -> "us"; -3 -> "ns"; -4 -> "ps"; -5 -> "fs"
 
-prettyPrimPorts :: (Attributes, PrimPort, NonEmpty Identifier) -> Print
+prettyPrimPorts :: (Attributes, PrimPort CExpr, NonEmpty Identifier) -> Print
 prettyPrimPorts (a, d, l) = do
   (ids, s) <- cslid1 prettyIdent l
   ports <- case d of
@@ -1306,7 +1315,7 @@ prettyPrimTable od b = case b of
       maybe mempty (\iv -> nest $ group ("initial" <=> od) <=> equals <+> pinit iv <> semi) mi
         <?#> block "table" "endtable" table
 
-prettyPrimitiveBlock :: PrimitiveBlock -> Print
+prettyPrimitiveBlock :: PrimitiveBlock CExpr -> Print
 prettyPrimitiveBlock (PrimitiveBlock a s o i pd b) = do
   (od, ol) <- prettyIdent o
   head <- fpadj (group . ("primitive" <=>)) prettyIdent s

@@ -15,7 +15,7 @@ module Verismith.Verilog2005.Utils
     genexprnumber,
     constifyIdent,
     constifyMaybeRange,
-    trConstifyGenExpr,
+    trConstifyExpr,
     constifyExpr,
     constifyLV,
     expr2netlv,
@@ -34,26 +34,15 @@ module Verismith.Verilog2005.Utils
     fromMGBlockedItem_add,
     fromMGBlockedItem,
     resolveInsts,
-    binToNat,
-    octToNat,
-    hexToNat,
-    evalBinary,
-    evalBinaryUnlimited,
-    evalOctal,
-    evalOctalUnlimited,
-    evalHexadecimal,
-    evalHexadecimalUnlimited,
-    evalDecimal,
-    evalNumber,
-    evalConstExprSelfDetermined
+    fitSnSz,
   )
 where
 
 import Control.Lens ((%~))
 import Data.Data.Lens (biplate)
 import Numeric.Natural
-import Data.Bits
 import Text.Printf (printf)
+import Data.Bits
 import Data.Functor.Compose
 import Data.Functor.Identity
 import Data.Function (on, (&))
@@ -64,7 +53,6 @@ import qualified Data.HashMap.Strict as HashMap
 import Data.List.NonEmpty (NonEmpty (..), (<|), toList)
 import qualified Data.List.NonEmpty as NE
 import Verismith.Verilog2005.Lexer (VerilogVersion (..), isIdentSimple)
-import Verismith.Verilog2005.Token (binToNat, octToNat, hexToNat)
 import Verismith.Verilog2005.AST
 import Verismith.Utils (nonEmpty, foldrMap1)
 
@@ -85,24 +73,24 @@ addAttributed f (Attributed na x) (Attributed a y) =
   if a /= na then Nothing else Attributed a <$> f x y
 
 -- | Makes a Verilog2005 expression out of a number
-genexprnumber :: Natural -> GenExpr i r a
-genexprnumber = ExprPrim . PrimNumber Nothing False . NDecimal
+genexprnumber :: Natural -> Expr i r a
+genexprnumber = ExprPrim . PrimNumber 0 False . NDecimal
 
 -- | converts HierIdent into Identifier
-constifyIdent :: HierIdent -> Maybe Identifier
+constifyIdent :: HierIdent ce -> Maybe Identifier
 constifyIdent (HierIdent p i) = case p of [] -> Just i; _ -> Nothing
 
 -- | the other way
-unconstIdent :: Identifier -> HierIdent
+unconstIdent :: Identifier -> HierIdent ce
 unconstIdent = HierIdent []
 
--- | converts Prim into GenPrim i r
-constifyGenPrim ::
+-- | converts NPrim into Prim i r
+constifyPrim ::
   (si -> Maybe di) ->
-  (Maybe DimRange -> Maybe r) ->
-  GenPrim si (Maybe DimRange) a ->
-  Maybe (GenPrim di r a)
-constifyGenPrim fi fr x = case x of
+  (Maybe (DimRange NExpr CExpr) -> Maybe r) ->
+  Prim si (Maybe (DimRange NExpr CExpr)) a ->
+  Maybe (Prim di r a)
+constifyPrim fi fr x = case x of
   PrimNumber s b n -> Just $ PrimNumber s b n
   PrimReal s -> Just $ PrimReal s
   PrimIdent s rng -> PrimIdent <$> fi s <*> fr rng
@@ -114,14 +102,16 @@ constifyGenPrim fi fr x = case x of
   PrimMinTypMax (MTMFull l t h) -> PrimMinTypMax <$> (MTMFull <$> ce l <*> ce t <*> ce h)
   PrimString s -> Just $ PrimString s
   where
-    ce = trConstifyGenExpr fi fr
+    ce = trConstifyExpr fi fr
 
 -- | the other way
-unconstPrim :: GenPrim Identifier (Maybe CRangeExpr) a -> GenPrim HierIdent (Maybe DimRange) a
+unconstPrim ::
+  Prim Identifier (Maybe (RangeExpr CExpr CExpr)) a ->
+  Prim (HierIdent CExpr) (Maybe (DimRange NExpr CExpr)) a
 unconstPrim x = case x of
   PrimNumber s b n -> PrimNumber s b n
   PrimReal s -> PrimReal s
-  PrimIdent s rng -> PrimIdent (unconstIdent s) (GenDimRange [] . unconstRange <$> rng)
+  PrimIdent s rng -> PrimIdent (unconstIdent s) (DimRange [] . unconstRange <$> rng)
   PrimConcat e -> PrimConcat (NE.map trUnconstExpr e)
   PrimMultConcat m e -> PrimMultConcat m (NE.map trUnconstExpr e)
   PrimFun s a e -> PrimFun (unconstIdent s) a (map trUnconstExpr e)
@@ -131,83 +121,86 @@ unconstPrim x = case x of
     PrimMinTypMax $ MTMFull (trUnconstExpr l) (trUnconstExpr t) (trUnconstExpr h)
   PrimString s -> PrimString s
 
--- | converts `GenExpr si (MaybeDimRange) a` into `GenExpr i r a`
-trConstifyGenExpr ::
+-- | converts `Expr si (MaybeDimRange) a` into `Expr i r a`
+trConstifyExpr ::
   (si -> Maybe di) ->
-  (Maybe DimRange -> Maybe r) ->
-  GenExpr si (Maybe DimRange) a ->
-  Maybe (GenExpr di r a)
-trConstifyGenExpr fi fr x = case x of
-  ExprPrim p -> ExprPrim <$> constifyGenPrim fi fr p
-  ExprUnOp op a p -> ExprUnOp op a <$> constifyGenPrim fi fr p
+  (Maybe (DimRange NExpr CExpr) -> Maybe r) ->
+  Expr si (Maybe (DimRange NExpr CExpr)) a ->
+  Maybe (Expr di r a)
+trConstifyExpr fi fr x = case x of
+  ExprPrim p -> ExprPrim <$> constifyPrim fi fr p
+  ExprUnOp op a p -> ExprUnOp op a <$> constifyPrim fi fr p
   ExprBinOp lhs op a rhs -> ExprBinOp <$> ce lhs <*> pure op <*> pure a <*> ce rhs
   ExprCond c a t f -> ExprCond <$> ce c <*> pure a <*> ce t <*> ce f
   where
-    ce = trConstifyGenExpr fi fr
+    ce = trConstifyExpr fi fr
 
--- | converts Expr's `DimRange` into CExpr's `CRangeExpr`
-constifyMaybeRange :: Maybe DimRange -> Maybe (Maybe CRangeExpr)
+-- | converts NExpr's `DimRange` into CExpr's `RangeExpr`
+constifyMaybeRange :: Maybe (DimRange NExpr CExpr) -> Maybe (Maybe (RangeExpr CExpr CExpr))
 constifyMaybeRange =
-  maybe (Just Nothing) $ \(GenDimRange l r) -> if null l then Just <$> constifyRange r else Nothing
+  maybe (Just Nothing) $ \(DimRange l r) -> if null l then Just <$> constifyRange r else Nothing
 
--- | converts Expr's `GenExpr` into CExpr `GenExpr`
-trConstifyExpr ::
-  GenExpr HierIdent (Maybe DimRange) a -> Maybe (GenExpr Identifier (Maybe CRangeExpr) a)
-trConstifyExpr = trConstifyGenExpr constifyIdent constifyMaybeRange
+-- | converts NExpr into CExpr
+trConstifyNExpr ::
+  Expr (HierIdent CExpr) (Maybe (DimRange NExpr CExpr)) a ->
+  Maybe (Expr Identifier (Maybe (RangeExpr CExpr CExpr)) a)
+trConstifyNExpr = trConstifyExpr constifyIdent constifyMaybeRange
 
 -- | the other way
-trUnconstExpr :: GenExpr Identifier (Maybe CRangeExpr) a -> GenExpr HierIdent (Maybe DimRange) a
+trUnconstExpr ::
+  Expr Identifier (Maybe (RangeExpr CExpr CExpr)) a ->
+  Expr (HierIdent CExpr) (Maybe (DimRange NExpr CExpr)) a
 trUnconstExpr x = case x of
   ExprPrim p -> ExprPrim (unconstPrim p)
   ExprUnOp op a p -> ExprUnOp op a (unconstPrim p)
   ExprBinOp lhs op a rhs -> ExprBinOp (trUnconstExpr lhs) op a (trUnconstExpr rhs)
   ExprCond c a t f -> ExprCond (trUnconstExpr c) a (trUnconstExpr t) (trUnconstExpr f)
 
--- | converts Expr to CExpr
-constifyExpr :: Expr -> Maybe CExpr
-constifyExpr (Expr e) = CExpr <$> trConstifyExpr e
+-- | converts NExpr to CExpr
+constifyExpr :: NExpr -> Maybe CExpr
+constifyExpr (NExpr e) = CExpr <$> trConstifyNExpr e
 
 -- | the other way
-unconstExpr :: CExpr -> Expr
-unconstExpr (CExpr e) = Expr (trUnconstExpr e)
+unconstExpr :: CExpr -> NExpr
+unconstExpr (CExpr e) = NExpr (trUnconstExpr e)
 
--- | converts RangeExpr into CRangeExpr
-constifyRange :: RangeExpr -> Maybe CRangeExpr
+-- | converts RangeExpr
+constifyRange :: RangeExpr NExpr CExpr -> Maybe (RangeExpr CExpr CExpr)
 constifyRange x = case x of
-  GRESingle e -> GRESingle <$> constifyExpr e
-  GREPair r2 -> Just $ GREPair r2
-  GREBaseOff b mp o -> (\cb -> GREBaseOff cb mp o) <$> constifyExpr b
+  RESingle e -> RESingle <$> constifyExpr e
+  REPair r2 -> Just $ REPair r2
+  REBaseOff b mp o -> (\cb -> REBaseOff cb mp o) <$> constifyExpr b
 
 -- | the other way
-unconstRange :: CRangeExpr -> RangeExpr
+unconstRange :: RangeExpr CExpr CExpr -> RangeExpr NExpr CExpr
 unconstRange x = case x of
-  GRESingle e -> GRESingle (unconstExpr e)
-  GREPair r2 -> GREPair r2
-  GREBaseOff b mp o -> GREBaseOff (unconstExpr b) mp o
+  RESingle e -> RESingle (unconstExpr e)
+  REPair r2 -> REPair r2
+  REBaseOff b mp o -> REBaseOff (unconstExpr b) mp o
 
--- | converts DimRange into CDimRange
-constifyDR :: GenDimRange Expr -> Maybe (GenDimRange CExpr)
-constifyDR (GenDimRange dim rng) = GenDimRange <$> mapM constifyExpr dim <*> constifyRange rng
+-- | converts DimRange
+constifyDR :: DimRange NExpr CExpr -> Maybe (DimRange CExpr CExpr)
+constifyDR (DimRange dim rng) = DimRange <$> mapM constifyExpr dim <*> constifyRange rng
 
 -- | the other way
-unconstDR :: GenDimRange CExpr -> GenDimRange Expr
-unconstDR (GenDimRange dim rng) = GenDimRange (map unconstExpr dim) (unconstRange rng)
+unconstDR :: DimRange CExpr CExpr -> DimRange NExpr CExpr
+unconstDR (DimRange dim rng) = DimRange (map unconstExpr dim) (unconstRange rng)
 
 -- | converts variable lvalue into net lvalue
-constifyLV :: VarLValue -> Maybe NetLValue
+constifyLV :: LValue NExpr CExpr -> Maybe (LValue CExpr CExpr)
 constifyLV v = case v of
   LVSingle hi mdr -> LVSingle hi <$> maybe (Just Nothing) (fmap Just . constifyDR) mdr
   LVConcat l -> LVConcat <$> mapM constifyLV l
 
 -- | the other way
-unconstLV :: NetLValue -> VarLValue
+unconstLV :: LValue CExpr CExpr -> LValue NExpr CExpr
 unconstLV n = case n of
   LVSingle hi dr -> LVSingle hi (unconstDR <$> dr)
   LVConcat l -> LVConcat (NE.map unconstLV l)
 
 -- | converts expression into net lvalue
-expr2netlv :: Expr -> Maybe NetLValue
-expr2netlv (Expr x) = aux x
+expr2netlv :: NExpr -> Maybe (LValue CExpr CExpr)
+expr2netlv (NExpr x) = aux x
   where
     aux x = case x of
       ExprPrim (PrimConcat c) -> LVConcat <$> mapM aux c
@@ -215,18 +208,18 @@ expr2netlv (Expr x) = aux x
       _ -> Nothing
 
 -- | the other way
-netlv2expr :: NetLValue -> Expr
-netlv2expr = Expr . aux
+netlv2expr :: LValue CExpr CExpr -> NExpr
+netlv2expr = NExpr . aux
   where
     aux x = case x of
       LVConcat e -> ExprPrim $ PrimConcat $ NE.map aux e
       LVSingle s dr -> ExprPrim $ PrimIdent s $ unconstDR <$> dr
 
 -- | Converts Function statements to statements
-toStatement :: FunctionStatement -> Statement
+toStatement :: FunctionStatement e ce -> Statement e ce
 toStatement x = case x of
   FSBlockAssign va -> SBlockAssign True va Nothing
-  FSCase zox e l d -> SCase zox e (map (\(FCaseItem p v) -> CaseItem p $ mybf v) l) (mybf d)
+  FSCase zox e l d -> SCase zox e (map (\(CaseItem p v) -> CaseItem p $ mybf v) l) (mybf d)
   FSIf e t f -> SIf e (mybf t) (mybf f)
   FSDisable hi -> SDisable hi
   FSLoop ls b -> SLoop ls $ toStatement <$> b
@@ -234,10 +227,10 @@ toStatement x = case x of
   where mybf = fmap $ fmap toStatement
 
 -- | the other way
-fromStatement :: Statement -> Maybe FunctionStatement
+fromStatement :: Statement e ce -> Maybe (FunctionStatement e ce)
 fromStatement x = case x of
   SBlockAssign True va Nothing -> Just $ FSBlockAssign va
-  SCase zox e l d -> FSCase zox e <$> traverse (\(CaseItem p v) -> FCaseItem p <$> mybf v) l <*> mybf d
+  SCase zox e l d -> FSCase zox e <$> traverse (\(CaseItem p v) -> CaseItem p <$> mybf v) l <*> mybf d
   SIf e t f -> FSIf e <$> mybf t <*> mybf f
   SDisable hi -> Just $ FSDisable hi
   SLoop ls b -> FSLoop ls <$> traverse fromStatement b
@@ -246,12 +239,12 @@ fromStatement x = case x of
   where mybf s = traverse (traverse fromStatement) s
 
 -- | Converts MybStmt to AttrStmt
-fromMybStmt :: MybStmt -> AttrStmt
+fromMybStmt :: Attributed (Maybe (Statement NExpr CExpr)) -> Attributed (Statement NExpr CExpr)
 fromMybStmt x = case x of
-  Attributed _ Nothing -> Attributed [] $ SIf (Expr $ genexprnumber 1) x $ Attributed [] Nothing
+  Attributed _ Nothing -> Attributed [] $ SIf (NExpr $ genexprnumber 1) x $ Attributed [] Nothing
   Attributed a (Just s) -> Attributed a s
 
-type BD f t = BlockDecl (Compose f Identified) t
+type BD f t = BlockDecl (Compose f Identified) t CExpr
 
 -- | Converts ModGenSingleItem's `BlockDecl` into ModGenBlockedItem's `BlockDecl`
 toMGIBlockDecl :: BD NonEmpty t -> NonEmpty (BD Identity t)
@@ -263,8 +256,7 @@ toMGIBlockDecl x = case x of
   BDRealTime d -> conv BDRealTime d
   BDEvent d -> conv BDEvent d
   BDLocalParam t d -> conv (BDLocalParam t) d
-  where
-    conv f = fmap (f . Compose . Identity) . getCompose
+  where conv f = fmap (f . Compose . Identity) . getCompose
 
 -- | Converts one ModGenBlockedItem's `BlockDecl` into ModGenSingleItem's `BlockDecl`
 fromMGIBlockDecl1 :: BD Identity t -> BD NonEmpty t
@@ -276,8 +268,7 @@ fromMGIBlockDecl1 x = case x of
   BDRealTime d -> conv BDRealTime d
   BDEvent d -> conv BDEvent d
   BDLocalParam t d -> conv (BDLocalParam t) d
-  where
-    conv f = f . Compose . (:|[]) . runIdentity . getCompose
+  where conv f = f . Compose . (:|[]) . runIdentity . getCompose
 
 -- | Merges one ModGenBlockedItem's `BlockDecl` with one ModGenSingleItem's `BlockDecl`
 fromMGIBlockDecl_add :: BD Identity t -> BD NonEmpty t -> Maybe (BD NonEmpty t)
@@ -290,11 +281,10 @@ fromMGIBlockDecl_add x y = case (x, y) of
   (BDEvent d, BDEvent l) -> add BDEvent d l
   (BDLocalParam nt d, BDLocalParam t l) | nt == t -> add (BDLocalParam t) d l
   _ -> Nothing
-  where
-    add f x l = Just $ f $ Compose $ runIdentity (getCompose x) <| getCompose l
+  where add f x l = Just $ f $ Compose $ runIdentity (getCompose x) <| getCompose l
 
 -- | Converts ModGenSingleItem like `BlockDecl` into StdBlockDecl `BlockDecl`
-toStdBlockDecl :: BD NonEmpty t -> NonEmpty (Identified (BlockDecl Identity t))
+toStdBlockDecl :: BD NonEmpty t -> NonEmpty (Identified (BlockDecl Identity t CExpr))
 toStdBlockDecl x = case x of
   BDReg sr d -> conv (BDReg sr) d
   BDInt d -> conv BDInt d
@@ -303,11 +293,11 @@ toStdBlockDecl x = case x of
   BDRealTime d -> conv BDRealTime d
   BDEvent d -> conv BDEvent d
   BDLocalParam t d -> conv (BDLocalParam t) d
-  where
-    conv f = fmap (fmap $ f . Identity) . getCompose
+  where conv f = fmap (fmap $ f . Identity) . getCompose
 
 -- | Converts `SpecifySingleItem` into `SpecifyBlockedItem`s
-toSpecBlockedItem :: SpecifySingleItem -> NonEmpty SpecifyBlockedItem
+toSpecBlockedItem ::
+  SpecifySingleItem NExpr CExpr MPExpr -> NonEmpty (SpecifyBlockedItem NExpr CExpr MPExpr)
 toSpecBlockedItem x = case x of
   SISpecParam rng d -> conv (SISpecParam rng) d
   SIPulsestyleOnevent st -> conv SIPulsestyleOnevent st
@@ -327,10 +317,10 @@ toSpecBlockedItem x = case x of
   SIPeriod ref tcl s -> [SIPeriod ref tcl s]
   SIWidth ref tcl t s -> [SIWidth ref tcl t s]
   SINoChange ref dat st en s -> [SINoChange ref dat st en s]
-  where
-    conv f = fmap (f . Identity)
+  where conv f = fmap (f . Identity)
 
-fromSpecBlockedItem1 :: SpecifyBlockedItem -> SpecifySingleItem
+fromSpecBlockedItem1 ::
+  SpecifyBlockedItem NExpr CExpr MPExpr -> SpecifySingleItem NExpr CExpr MPExpr
 fromSpecBlockedItem1 x = case x of
   SISpecParam rng d -> conv (SISpecParam rng) d
   SIPulsestyleOnevent st -> conv SIPulsestyleOnevent st
@@ -350,10 +340,12 @@ fromSpecBlockedItem1 x = case x of
   SIPeriod ref tcl s -> SIPeriod ref tcl s
   SIWidth ref tcl t s -> SIWidth ref tcl t s
   SINoChange ref dat st en s -> SINoChange ref dat st en s
-  where
-    conv f = f . (:|[]) . runIdentity
+  where conv f = f . (:|[]) . runIdentity
 
-fromSpecBlockedItem_add :: SpecifyBlockedItem -> SpecifySingleItem -> Maybe SpecifySingleItem
+fromSpecBlockedItem_add ::
+  SpecifyBlockedItem NExpr CExpr MPExpr ->
+  SpecifySingleItem NExpr CExpr MPExpr ->
+  Maybe (SpecifySingleItem NExpr CExpr MPExpr)
 fromSpecBlockedItem_add x y = case (x, y) of
   (SISpecParam nrng d, SISpecParam rng l) | nrng == rng-> add (SISpecParam rng) d l
   (SIPulsestyleOnevent st, SIPulsestyleOnevent l) -> add SIPulsestyleOnevent st l
@@ -361,15 +353,58 @@ fromSpecBlockedItem_add x y = case (x, y) of
   (SIShowcancelled st, SIShowcancelled l) -> add SIShowcancelled st l
   (SINoshowcancelled st, SINoshowcancelled l) -> add SINoshowcancelled st l
   _ -> Nothing
-  where
-    add f x y = Just $ f $ runIdentity x <| y
+  where add f x y = Just $ f $ runIdentity x <| y
 
 -- | Converts `SpecifyBlockedItem`s into `SpecifySingleItem`s
-fromSpecBlockedItem :: [SpecifyBlockedItem] -> [SpecifySingleItem]
+fromSpecBlockedItem ::
+  [SpecifyBlockedItem NExpr CExpr MPExpr] -> [SpecifySingleItem NExpr CExpr MPExpr]
 fromSpecBlockedItem = nonEmpty [] $ toList . regroup fromSpecBlockedItem1 fromSpecBlockedItem_add
 
+-- | Converts `Gate` types
+toBlockedGate :: Gate NonEmpty NExpr CExpr -> NonEmpty (Gate Identity NExpr CExpr)
+toBlockedGate x = case x of
+  GCMos r d3 l -> conv (GCMos r d3) l
+  GEnable r b ds d3 l -> conv (GEnable r b ds d3) l
+  GMos r np d3 l -> conv (GMos r np d3) l
+  GNIn nt n ds d2 l -> conv (GNIn nt n ds d2) l
+  GNOut r ds d2 l -> conv (GNOut r ds d2) l
+  GPassEn r b d2 l -> conv (GPassEn r b d2) l
+  GPass r l -> conv (GPass r) l
+  GPull b ds l -> conv (GPull b ds) l
+  where conv f = fmap (f . Identity)
+
+fromBlockedGate1 :: Gate Identity NExpr CExpr -> Gate NonEmpty NExpr CExpr
+fromBlockedGate1 x = case x of
+  GCMos r d3 i -> conv (GCMos r d3) i
+  GEnable r b ds d3 i -> conv (GEnable r b ds d3) i
+  GMos r np d3 i -> conv (GMos r np d3) i
+  GNIn nt n ds d2 i -> conv (GNIn nt n ds d2) i
+  GNOut r ds d2 i -> conv (GNOut r ds d2) i
+  GPassEn r b d2 i -> conv (GPassEn r b d2) i
+  GPass r i -> conv (GPass r) i
+  GPull b ds i -> conv (GPull b ds) i
+  where conv f = f . (:|[]) . runIdentity
+
+fromBlockedGate_add ::
+  Gate Identity NExpr CExpr -> Gate NonEmpty NExpr CExpr -> Maybe (Gate NonEmpty NExpr CExpr)
+fromBlockedGate_add x y = case (x, y) of
+  (GCMos nr nd3 i, GCMos r d3 l) | nr == r && nd3 == d3 -> add (GCMos r d3) i l
+  (GEnable nr nb nds nd3 i, GEnable r b ds d3 l)
+   | nr == r && nb == b && nds == ds && nd3 == d3 -> add (GEnable r b ds d3) i l
+  (GMos nr nnp nd3 i, GMos r np d3 l) | nr == r && nnp == np && nd3 == d3 -> add (GMos r np d3) i l
+  (GNIn nnt nn nds nd2 i, GNIn nt n ds d2 l)
+    | nnt == nt && nn == n && nds == ds && nd2 == d2 -> add (GNIn nt n ds d2) i l
+  (GNOut nr nds nd2 i, GNOut r ds d2 l) | nr == r && nds == ds && nd2 == d2 ->
+    add (GNOut r ds d2) i l
+  (GPassEn nr nb nd2 i, GPassEn r b d2 l) | nr == r && nb == b && nd2 == d2 ->
+    add (GPassEn r b d2) i l
+  (GPass nr i, GPass r l) | nr == r -> add (GPass r) i l
+  (GPull nb nds i, GPull b ds l) | nb == b && nds == ds -> add (GPull b ds) i l
+  _ -> Nothing
+  where add f x y = Just $ f $ runIdentity x <| y
+
 -- | Converts `ModGenSingleItem` into `ModGenBlockedItem`s
-toMGBlockedItem :: ModGenSingleItem -> NonEmpty ModGenBlockedItem
+toMGBlockedItem :: ModGenSingleItem NExpr CExpr -> NonEmpty (ModGenBlockedItem NExpr CExpr)
 toMGBlockedItem x = case x of
   MGINetInit nt ds np ni -> conv (MGINetInit nt ds np) ni
   MGINetDecl nt np nd -> conv (MGINetDecl nt np) nd
@@ -381,14 +416,7 @@ toMGBlockedItem x = case x of
   MGIFunc b t i d s -> [MGIFunc b t i d s]
   MGIDefParam po -> conv MGIDefParam po
   MGIContAss ds d3 na -> conv (MGIContAss ds d3) na
-  MGICMos r d3 l -> conv (MGICMos r d3) l
-  MGIEnable r b ds d3 l -> conv (MGIEnable r b ds d3) l
-  MGIMos r np d3 l -> conv (MGIMos r np d3) l
-  MGINIn nt n ds d2 l -> conv (MGINIn nt n ds d2) l
-  MGINOut r ds d2 l -> conv (MGINOut r ds d2) l
-  MGIPassEn r b d2 l -> conv (MGIPassEn r b d2) l
-  MGIPass r l -> conv (MGIPass r) l
-  MGIPull b ds l -> conv (MGIPull b ds) l
+  MGIGate g -> MGIGate <$> toBlockedGate g
   MGIUDPInst udp ds d2 i -> conv (MGIUDPInst udp ds d2) i
   MGIModInst mod pa i -> conv (MGIModInst mod pa) i
   MGIUnknownInst t p i -> conv (MGIUnknownInst t p) i
@@ -396,10 +424,9 @@ toMGBlockedItem x = case x of
   MGIAlways s -> [MGIAlways s]
   MGILoopGen ii iv c ui uv b -> [MGILoopGen ii iv c ui uv b]
   MGICondItem ci -> [MGICondItem ci]
-  where
-    conv f = fmap (f . Identity)
+  where conv f = fmap (f . Identity)
 
-fromMGBlockedItem1 :: ModGenBlockedItem -> ModGenSingleItem
+fromMGBlockedItem1 :: ModGenBlockedItem NExpr CExpr -> ModGenSingleItem NExpr CExpr
 fromMGBlockedItem1 x = case x of
   MGINetInit nt ds np ni -> conv (MGINetInit nt ds np) ni
   MGINetDecl nt np nd -> conv (MGINetDecl nt np) nd
@@ -411,14 +438,7 @@ fromMGBlockedItem1 x = case x of
   MGIFunc b t i d s -> MGIFunc b t i d s
   MGIDefParam po -> conv MGIDefParam po
   MGIContAss ds d3 na -> conv (MGIContAss ds d3) na
-  MGICMos r d3 i -> conv (MGICMos r d3) i
-  MGIEnable r b ds d3 i -> conv (MGIEnable r b ds d3) i
-  MGIMos r np d3 i -> conv (MGIMos r np d3) i
-  MGINIn nt n ds d2 i -> conv (MGINIn nt n ds d2) i
-  MGINOut r ds d2 i -> conv (MGINOut r ds d2) i
-  MGIPassEn r b d2 i -> conv (MGIPassEn r b d2) i
-  MGIPass r i -> conv (MGIPass r) i
-  MGIPull b ds i -> conv (MGIPull b ds) i
+  MGIGate g -> MGIGate $ fromBlockedGate1 g
   MGIUDPInst udp ds d2 i -> conv (MGIUDPInst udp ds d2) i
   MGIModInst mod pa i -> conv (MGIModInst mod pa) i
   MGIUnknownInst t p i -> conv (MGIUnknownInst t p) i
@@ -426,10 +446,12 @@ fromMGBlockedItem1 x = case x of
   MGIAlways s -> MGIAlways s
   MGILoopGen ii iv c ui uv b -> MGILoopGen ii iv c ui uv b
   MGICondItem ci -> MGICondItem ci
-  where
-    conv f = f . (:|[]) . runIdentity
+  where conv f = f . (:|[]) . runIdentity
 
-fromMGBlockedItem_add :: ModGenBlockedItem -> ModGenSingleItem -> Maybe ModGenSingleItem
+fromMGBlockedItem_add ::
+  ModGenBlockedItem NExpr CExpr ->
+  ModGenSingleItem NExpr CExpr ->
+  Maybe (ModGenSingleItem NExpr CExpr)
 fromMGBlockedItem_add x y = case (x, y) of
   (MGINetInit nnt nds nnp ni, MGINetInit nt ds np l) | nnt == nt && nds == ds && nnp == np ->
     add (MGINetInit nt ds np) ni l
@@ -442,19 +464,7 @@ fromMGBlockedItem_add x y = case (x, y) of
   (MGIDefParam po, MGIDefParam l) -> add MGIDefParam po l
   (MGIContAss nds nd3 na, MGIContAss ds d3 l) | nds == ds && nd3 == d3 ->
     add (MGIContAss ds d3) na l
-  (MGICMos nr nd3 i, MGICMos r d3 l) | nr == r && nd3 == d3 -> add (MGICMos r d3) i l
-  (MGIEnable nr nb nds nd3 i, MGIEnable r b ds d3 l)
-   | nr == r && nb == b && nds == ds && nd3 == d3 -> add (MGIEnable r b ds d3) i l
-  (MGIMos nr nnp nd3 i, MGIMos r np d3 l) | nr == r && nnp == np && nd3 == d3 ->
-    add (MGIMos r np d3) i l
-  (MGINIn nnt nn nds nd2 i, MGINIn nt n ds d2 l)
-    | nnt == nt && nn == n && nds == ds && nd2 == d2 -> add (MGINIn nt n ds d2) i l
-  (MGINOut nr nds nd2 i, MGINOut r ds d2 l) | nr == r && nds == ds && nd2 == d2 ->
-    add (MGINOut r ds d2) i l
-  (MGIPassEn nr nb nd2 i, MGIPassEn r b d2 l) | nr == r && nb == b && nd2 == d2 ->
-    add (MGIPassEn r b d2) i l
-  (MGIPass nr i, MGIPass r l) | nr == r -> add (MGIPass r) i l
-  (MGIPull nb nds i, MGIPull b ds l) | nb == b && nds == ds -> add (MGIPull b ds) i l
+  (MGIGate g, MGIGate gl) -> MGIGate <$> fromBlockedGate_add g gl
   (MGIUDPInst nudp nds nd2 i, MGIUDPInst udp ds d2 l)
     | nudp == udp && nds == ds && nd2 == d2 -> add (MGIUDPInst udp ds d2) i l
   (MGIModInst nmod npa i, MGIModInst mod pa l) | nmod == mod && npa == pa ->
@@ -462,11 +472,11 @@ fromMGBlockedItem_add x y = case (x, y) of
   (MGIUnknownInst nt np i, MGIUnknownInst t p l) | nt == t && np == p ->
     add (MGIUnknownInst t p) i l
   _ -> Nothing
-  where
-    add f x y = Just $ f $ runIdentity x <| y
+  where add f x y = Just $ f $ runIdentity x <| y
 
 -- | Converts `ModGenBlockedItem`s into `ModGenSingleItem`s
-fromMGBlockedItem :: [Attributed ModGenBlockedItem] -> [Attributed ModGenSingleItem]
+fromMGBlockedItem ::
+  [Attributed (ModGenBlockedItem NExpr CExpr)] -> [Attributed (ModGenSingleItem NExpr CExpr)]
 fromMGBlockedItem =
   nonEmpty [] $ toList . regroup (fmap fromMGBlockedItem1) (addAttributed fromMGBlockedItem_add)
 
@@ -508,101 +518,9 @@ resolveInsts v = do
     _ -> mgi
   where duperr = printf "module or primitive %s defined more than once" . show
 
--- | Evaluates a binary number
-evalBinaryUnlimited :: NonEmpty BXZ -> Maybe Natural
-evalBinaryUnlimited (h :| t) =
-  foldl (\a x -> a >>= \n -> ((n .<<. 1) .|.) <$> binToNat x) (binToNat h) t
-
--- TODO FROM HERE: don't use p, use use bit sz instead
--- | Evaluates a binary number
-evalBinary :: Bool -> Natural -> NonEmpty BXZ -> Maybe Integer
-evalBinary sn sz =
-  fmap (\(_, _, n) -> n) . foldrMap1 (mknum 0 1 0) (\x -> (>>= \(csz, p, n) -> mknum csz p n x))
-  where
-    mknum csz p n x = (,,) (csz + 1) (n .<<. 1) <$> case x of
-      _ | csz >= sz -> Just n
-      BXZ0 -> Just n
-      BXZ1 | csz + 1 >= sz -> Just $ n - p
-      BXZ1 -> Just $ n + p
-      _ -> Nothing
-
--- | Evaluates an octal number
-evalOctalUnlimited :: NonEmpty OXZ -> Maybe Natural
-evalOctalUnlimited (h :| t) =
-  foldl (\a x -> a >>= \n -> ((n .<<. 3) .|.) <$> octToNat x) (octToNat h) t
-
--- | Evaluates an octal number
-evalOctal :: Bool -> Natural -> NonEmpty OXZ -> Maybe Integer
-evalOctal sn sz =
-  fmap (\(_, _, n) -> n) . foldrMap1 (mknum 0 1 0) (\x -> (>>= \(csz, p, n) -> mknum csz p n x))
-  where
-    mknum csz p n x = (,,) (csz + 3) (n .<<. 3) <$> case () of
-      () | csz >= sz -> Just n
-      () | csz + 3 >= sz ->
-        let b = bit $ fromEnum $ sz - csz - 1 in
-        (\o -> n + toInteger (o .&. (b - 1)) * p - toInteger (o .&. b) * p) <$> octToNat x
-      () -> (\o -> n + toInteger o * p) <$> octToNat x
-
--- | Evaluates a hexadecimal number
-evalHexadecimalUnlimited :: NonEmpty HXZ -> Maybe Natural
-evalHexadecimalUnlimited (h :| t) =
-  foldl (\a x -> a >>= \n -> ((n .<<. 4) .|.) <$> hexToNat x) (hexToNat h) t
-
--- | Evaluates a hexadecimal number
-evalHexadecimal :: Bool -> Natural -> NonEmpty HXZ -> Maybe Integer
-evalHexadecimal sn sz =
-  fmap (\(_, _, n) -> n) . foldrMap1 (mknum 0 1 0) (\x -> (>>= \(csz, p, n) -> mknum csz p n x))
-  where
-    mknum csz p n x = (,,) (csz + 4) (n .<<. 4) <$> case () of
-      () | csz >= sz -> Just n
-      () | csz + 4 >= sz ->
-        let b = bit $ fromEnum $ sz - csz - 1 in
-        (\h -> n + toInteger (h .&. (b - 1)) * p - toInteger (h .&. b) * p) <$> hexToNat x
-      () -> (\h -> n + toInteger h * p) <$> hexToNat x
-
--- | Evaluates a decimal number
-evalDecimal :: Bool -> Natural -> Natural -> Integer
-evalDecimal sn sz n = toInteger (n .&. (b - 1)) - toInteger (n .&. b)
-  where b = bit $ fromEnum sz - 1
-
--- | Evaluates a primary expression number
-evalNumber :: Maybe Natural -> Bool -> Number -> Maybe Integer
-evalNumber msz sn v = case v of
-  NBinary l -> case msz of
-    Nothing -> toInteger <$> evalBinaryUnlimited l
-    Just sz -> evalBinary sn sz l
-  NOctal l -> case msz of
-    Nothing -> toInteger <$> evalOctalUnlimited l
-    Just sz -> evalOctal sn sz l
-  NDecimal n -> case msz of
-    Nothing -> Just $ toInteger n
-    Just sz -> Just $ evalDecimal sn sz n
-  NHex l -> case msz of
-    Nothing -> toInteger <$> evalHexadecimalUnlimited l
-    Just sz -> evalHexadecimal sn sz l
-  _ -> Nothing
-
--- TODO HERE
-evalConstExprSelfDetermined :: GenExpr i r a -> Maybe (Natural, bool, NonEmpty BZX)
-evalConstExprSelfDetermined x = case x of
-  ExprPrim p -> evalConstPrimSelfDetermined p
-  ExprUnOp o _ p -> case o of
-    Un... -> evalConstPrimSelfDetermined p
-  ExprBinOp l o _ r -> case o of
-    Bin... -> ...
-  ExprCond c _ t f -> exprZOX c >>= \zox -> case zox of
-    ZOXZ -> 
-    ZOXO -> 
-    ZOXX -> 
-
-evalConstPrimSelfDetermined :: GenPrim i r a -> Maybe (Natural, bool, NonEmpty BZX)
-evalConstPrimSelfDetermined x = case x of
-  PrimNumber sz sn v -> 
-  PrimReal s -> 
-  PrimIdent _ _ -> Nothing
-  PrimConcat l -> 
-  PrimMultConcat n e -> 
-  PrimFun _ _ _ -> Nothing
-  PrimSysFun i args -> 
-  PrimMinTypMax mtm -> 
-  PrimString s -> 
+-- | Fit the number to a sign and size
+fitSnSz :: Bool -> Natural -> Integer -> Integer
+fitSnSz sn sz v =
+  if sn
+    then let b = bit $ fromEnum $ sz - 1 in (v .&. (b - 1)) - (v .&. b)
+    else v .&. (bit (fromEnum sz) - 1)

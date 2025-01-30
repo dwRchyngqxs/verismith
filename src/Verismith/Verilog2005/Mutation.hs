@@ -18,6 +18,7 @@ import Numeric.Natural
 import Data.Bits
 import Data.Typeable
 import Data.Maybe
+import Data.Functor.Identity
 import Data.List.NonEmpty (NonEmpty)
 import Data.Bifunctor (second)
 import Data.Bitraversable (bitraverse)
@@ -427,6 +428,17 @@ mutateUknInst :: Mutation UknInst
 mutateUknInst (UknInst i a0 args) =
   UknInst <$> mutateInstanceName i <*> mutateNLV a0 <*> mapM mutateExpr args
 
+mutateGate :: Mutation (Gate Identity)
+mutateGate x = case x of
+  GCMos r d3 i -> GCMos r <$> traverse mutateD3 d3 <*> traverse mutateGICMos i
+  GEnable r b ds d3 i -> GEnable r b ds <$> traverse mutateD3 d3 <*> traverse mutateGIEnable i
+  GMos r np d3 i -> GMos r np <$> traverse mutateD3 d3 <*> traverse mutateGIMos i
+  GNIn nin n ds d2 i -> GNIn nin n ds <$> traverse mutateD2 d2 <*> traverse mutateGINIn i
+  GNOut r ds d2 i -> GNOut r ds <$> traverse mutateD2 d2 <*> traverse mutateGINOut i
+  GPassEn r b d2 i -> GPassEn r b <$> traverse mutateD2 d2 <*> traverse mutateGIPassEn i
+  GPass r i -> GPass r <$> traverse mutateGIPass i
+  GPull ud ds i -> GPull ud ds <$> traverse mutateGIPull i
+
 mutateMGI :: Mutation ModGenBlockedItem
 mutateMGI = mutateWith _msModGenItem >=> \x -> case x of
   MGINetInit nt ds np ni -> MGINetInit nt ds <$> mutateNP np <*> traverse mutateNI ni
@@ -443,14 +455,7 @@ mutateMGI = mutateWith _msModGenItem >=> \x -> case x of
       <*> mutateFStmt b
   MGIDefParam po -> MGIDefParam <$> traverse mutatePO po
   MGIContAss ds d3 na -> MGIContAss ds <$> traverse mutateD3 d3 <*> traverse mutateNAss na
-  MGICMos r d3 i -> MGICMos r <$> traverse mutateD3 d3 <*> traverse mutateGICMos i
-  MGIEnable r b ds d3 i -> MGIEnable r b ds <$> traverse mutateD3 d3 <*> traverse mutateGIEnable i
-  MGIMos r np d3 i -> MGIMos r np <$> traverse mutateD3 d3 <*> traverse mutateGIMos i
-  MGINIn nin n ds d2 i -> MGINIn nin n ds <$> traverse mutateD2 d2 <*> traverse mutateGINIn i
-  MGINOut r ds d2 i -> MGINOut r ds <$> traverse mutateD2 d2 <*> traverse mutateGINOut i
-  MGIPassEn r b d2 i -> MGIPassEn r b <$> traverse mutateD2 d2 <*> traverse mutateGIPassEn i
-  MGIPass r i -> MGIPass r <$> traverse mutateGIPass i
-  MGIPull ud ds i -> MGIPull ud ds <$> traverse mutateGIPull i
+  MGIGate g -> MGIGate <$> mutateGate g
   MGIUDPInst kind ds d2 i ->
     MGIUDPInst kind ds <$> traverse mutateD2 d2 <*> traverse mutateUDPInst i
   MGIModInst kind params i ->
@@ -650,15 +655,15 @@ evalNumberToNat msz sn v = case v of
   _ -> Nothing
   where castToPos n = if n < 0 then Nothing else Just $ fromInteger n
 
-primToNumIdent :: GenPrim HierIdent r a -> Maybe NumIdent
+primToNumIdent :: GenPrim HierIdent (Maybe r) a -> Maybe NumIdent
 primToNumIdent p = case p of
   PrimReal r -> Just $ NIReal r
   PrimNumber sz sn v -> NINumber <$> evalNumberToNat sz sn v
   PrimIdent (HierIdent [] i) Nothing -> Just $ NIIdent i
-  PrimMinTypMax (MTMSingle (ExprPrim p))) -> aux p
+  PrimMinTypMax (MTMSingle (ExprPrim p)) -> primToNumIdent p
   _ -> Nothing
 
-numIdentToPrim :: NumIdent -> GenPrim HierIdent r a
+numIdentToPrim :: NumIdent -> GenPrim HierIdent (Maybe r) a
 numIdentToPrim ni = case ni of
   NIReal r -> PrimReal r
   NINumber n -> PrimNumber Nothing False $ NDecimal n
@@ -698,7 +703,7 @@ delay3ToBase x = case x of
   D31 (MTMSingle (Expr (ExprPrim p))) -> D3Base <$> primToNumIdent p
   D32 (MTMSingle (Expr (ExprPrim p1))) (MTMSingle (Expr (ExprPrim p2))) | p1 == p2 ->
     D3Base <$> primToNumIdent p1
-  D32
+  D33
     (MTMSingle (Expr (ExprPrim p1)))
     (MTMSingle (Expr (ExprPrim p2)))
     (MTMSingle (Expr (ExprPrim p3)))
@@ -726,7 +731,7 @@ delay3To3 x = case x of
   D32 mtm1 mtm2 | mtm1 == mtm2 -> Just $ D33 mtm1 mtm1 mtm1
   _ -> Nothing
 
--- TODO NEXT: Use constant eval self-determined
+{- TODO NEXT: Use constant eval self-determined
 loopForever :: PureMutation LoopStatement
 loopForever x = case x of
   LSWhile (Expr e) | exprZOX e == Just ZOXO -> Just $ LSForever
@@ -742,15 +747,16 @@ loopWhile x = case x of
   LSForever -> Just $ LSWhile $ Expr $ ExprPrim $ PrimNumber Nothing False $ NDecimal 1 -- Any nonfalse
   LSRepeat (Expr e) | maybe False isZOXZX (isExprZOX e) -> Just $ LSWhile $ Expr e -- OR 0 OR Z OR X?
   _ -> Nothing
+-}
 
-loopSForever :: PureMutation Statement
-loopSRepeat :: PureMutation Statement
-loopSWhile :: PureMutation Statement
-loopSFor :: PureMutation Statement
-loopFSForever :: PureMutation FStatement
-loopFSRepeat :: PureMutation FStatement
-loopFSWhile :: PureMutation FStatement
-loopFSFor :: PureMutation FStatement
+-- loopSForever :: PureMutation Statement
+-- loopSRepeat :: PureMutation Statement
+-- loopSWhile :: PureMutation Statement
+-- loopSFor :: PureMutation Statement
+-- loopFSForever :: PureMutation FStatement
+-- loopFSRepeat :: PureMutation FStatement
+-- loopFSWhile :: PureMutation FStatement
+-- loopFSFor :: PureMutation FStatement
 
 -- constToBin :: PureMutation (GenPrim i r a)
 -- constToOct :: PureMutation (GenPrim i r a)

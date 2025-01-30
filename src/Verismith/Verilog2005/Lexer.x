@@ -11,7 +11,6 @@
 
 module Verismith.Verilog2005.Lexer
   ( scanTokens
-  , parseDecimal
   , isKW
   , isIdentSimple
   , VerilogVersion (..)
@@ -349,14 +348,8 @@ hex s = LitHex $ mapMaybe (\c -> case c of
 xz :: SBS.ByteString -> Token
 xz s = LitXZ $ let c = SBS.head s in c == c2w 'x' || c == c2w 'X'
 
-parseDecimal :: SBS.ByteString -> Natural
-parseDecimal =
-  fromInteger . SBS.foldl
-    (\acc d -> if c2w '0' <= d && d <= c2w '9' then 10*acc + toInteger (d - c2w '0') else acc)
-    0
-
 decimal :: SBS.ByteString -> Token
-decimal = LitDecimal . parseDecimal
+decimal = LitDecimal . read . unpackChars
 
 unbxz :: SBS.ByteString -> BXZ
 unbxz s = case s of "0" -> BXZ0; "1" -> BXZ1; "x" -> BXZX; "X" -> BXZX; "z" -> BXZZ; "Z" -> BXZZ
