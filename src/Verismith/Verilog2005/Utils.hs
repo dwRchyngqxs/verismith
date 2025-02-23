@@ -480,6 +480,13 @@ fromMGBlockedItem ::
 fromMGBlockedItem =
   nonEmpty [] $ toList . regroup (fmap fromMGBlockedItem1) (addAttributed fromMGBlockedItem_add)
 
+-- | Bimap on RangeExpr
+bimapRangeExpr :: (e -> ne) -> (ce -> nce) -> RangeExpr e ce -> RangeExpr ne nce
+bimapRangeExpr fe fce x = case x of
+  RESingle e -> RESingle $ fe e
+  REPair (Range2 lce hce) -> REPair $ Range2 (fce lce) (fce hce)
+  REBaseOff be b oe -> REBaseOff (fe be) b (fce oe)
+
 -- | Resolves Module and Primitive instantiation if possible
 -- | Also checks there are no duplicate toplevel elements
 resolveInsts :: Verilog2005 -> Either String Verilog2005

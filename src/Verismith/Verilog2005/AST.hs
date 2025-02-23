@@ -157,7 +157,7 @@ data MinTypMax e
         _mtmTyp :: !e,
         _mtmMax :: !e
       }
-  deriving (Show, Eq, Data, Generic)
+  deriving (Show, Eq, Data, Generic, Functor, Foldable, Traversable)
 
 -- | Identifier, do not use for other things (like a string literal), used for biplate
 newtype Identifier = Identifier ByteString
