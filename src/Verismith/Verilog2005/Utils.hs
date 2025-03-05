@@ -34,6 +34,7 @@ module Verismith.Verilog2005.Utils
     fromMGBlockedItem_add,
     fromMGBlockedItem,
     resolveInsts,
+    fitSz,
     fitSnSz,
   )
 where
@@ -480,13 +481,6 @@ fromMGBlockedItem ::
 fromMGBlockedItem =
   nonEmpty [] $ toList . regroup (fmap fromMGBlockedItem1) (addAttributed fromMGBlockedItem_add)
 
--- | Bimap on RangeExpr
-bimapRangeExpr :: (e -> ne) -> (ce -> nce) -> RangeExpr e ce -> RangeExpr ne nce
-bimapRangeExpr fe fce x = case x of
-  RESingle e -> RESingle $ fe e
-  REPair (Range2 lce hce) -> REPair $ Range2 (fce lce) (fce hce)
-  REBaseOff be b oe -> REBaseOff (fe be) b (fce oe)
-
 -- | Resolves Module and Primitive instantiation if possible
 -- | Also checks there are no duplicate toplevel elements
 resolveInsts :: Verilog2005 -> Either String Verilog2005
@@ -525,9 +519,13 @@ resolveInsts v = do
     _ -> mgi
   where duperr = printf "module or primitive %s defined more than once" . show
 
+-- | Fit a number to a size (0 |-> infiniy)
+fitSz :: Natural -> Integer -> Integer
+fitSz sz v = if sz == 0 then v else v .&. (bit (fromEnum sz) - 1)
+
 -- | Fit the number to a sign and size
 fitSnSz :: Bool -> Natural -> Integer -> Integer
 fitSnSz sn sz v =
-  if sn
+  if sn && sz /= 0
     then let b = bit $ fromEnum $ sz - 1 in (v .&. (b - 1)) - (v .&. b)
-    else v .&. (bit (fromEnum sz) - 1)
+    else fitSz sz v

@@ -137,6 +137,7 @@ import Data.Functor.Classes
 import Data.ByteString (ByteString)
 import Data.ByteString.Internal (c2w, packChars)
 import Data.Data
+import Data.Bifunctor
 import Data.Data.Lens
 import Data.String (IsString (..))
 import Text.Show (showListWith)
@@ -308,11 +309,14 @@ data HierIdent ce = HierIdent
   { _hiPath :: ![(Identifier, Maybe ce)],
     _hiIdent :: !Identifier
   }
-  deriving (Show, Eq, Data, Generic)
+  deriving (Show, Eq, Data, Generic, Functor, Foldable, Traversable)
 
 -- | Indexing for dimension and range
 data DimRange et ce = DimRange {_drDim :: ![et], _drRange :: !(RangeExpr et ce)}
-  deriving (Show, Eq, Data, Generic)
+  deriving (Show, Eq, Data, Generic, Functor)
+
+instance Bifunctor DimRange where
+  bimap fe fce (DimRange d r) = DimRange (map fe d) (bimap fe fce r)
 
 -- | Parametric expression
 data Expr i r a
@@ -357,30 +361,18 @@ data Attribute = Attribute
 type Attributes = [[Attribute]]
 
 data Attributed t = Attributed {_attrAttr :: !Attributes, _attrData :: !t}
-  deriving (Show, Eq, Data, Generic)
-
-instance Functor Attributed where
-  fmap f (Attributed a x) = Attributed a $ f x
+  deriving (Show, Eq, Data, Generic, Functor, Foldable, Traversable)
 
 instance Applicative Attributed where
   pure = Attributed []
   (<*>) (Attributed a1 f) (Attributed a2 x) = Attributed (a1 <> a2) $ f x
 
-instance Foldable Attributed where
-  foldMap f (Attributed _ x) = f x
-
-instance Traversable Attributed where
-  sequenceA (Attributed a x) = fmap (Attributed a) x
-
 data AttrIded t = AttrIded {_aiAttr :: !Attributes, _aiIdent :: !Identifier, _aiData :: !t}
-  deriving (Show, Eq, Data, Generic)
-
-instance Functor AttrIded where
-  fmap f (AttrIded a s x) = AttrIded a s $ f x
+  deriving (Show, Eq, Data, Generic, Functor)
 
 -- | Range2
 data Range2 ce = Range2 {_r2MSB :: !ce, _r2LSB :: !ce}
-  deriving (Show, Eq, Data, Generic)
+  deriving (Show, Eq, Data, Generic, Functor)
 
 -- | Range expressions
 data RangeExpr et ce
@@ -391,7 +383,13 @@ data RangeExpr et ce
         _reMin_plus :: !Bool,
         _reOffset :: !ce
       }
-  deriving (Show, Eq, Data, Generic)
+  deriving (Show, Eq, Data, Generic, Functor)
+
+instance Bifunctor RangeExpr where
+  bimap fe fce x = case x of
+    RESingle e -> RESingle $ fe e
+    REPair r -> REPair $ fmap fce r
+    REBaseOff be b oe -> REBaseOff (fe be) b (fce oe)
 
 -- | Number or Identifier
 data NumIdent
