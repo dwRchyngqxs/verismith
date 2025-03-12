@@ -10,7 +10,7 @@
 -- {-# LANGUAGE OverloadedLists #-}
 
 module Verismith.Verilog2005.Mutation
-  ( 
+  ( runMutation,
   )
 where
 
@@ -27,14 +27,11 @@ import GHC.IsList
 import Control.Monad
 import Control.Monad.Reader
 import Verismith.Utils (mkpair)
+import Verismith.Config (MutationOpts, Config)
 import Verismith.Verilog2005.Randomness
 import Verismith.Verilog2005.AST
 import qualified Verismith.Verilog2005.EvalElabAST as EE
 import Verismith.Verilog2005.Utils
-
-data MutationOpts = MutationOpts
-  { _moIdentity :: !Double
-  }
 
 data MutationStore = MutationStore
   { _msMTM :: !(forall t. MutationVector (MinTypMax t)),
@@ -96,8 +93,37 @@ type Mutation t = t -> Mutator t
 -- ModGenItem-> See ESA, gate conversion, always-initial forever, cond-loop
 -- PathDelayValue-> refer to conversion table
 
--- buildStore :: MutationOpts -> MutationStore
--- TODO
+-- TODO LATER: options
+buildStore :: MutationOpts -> MutationStore
+buildStore _ = MutationStore {
+    _msMTM = [(1.0, mtmTo1), (1.0, mtmTo3)],
+    _msPrim = [], -- [(1.0, ), ]
+    _msExpr = [], -- [(1.0, ), ]
+    _msAttr = [], -- [(1.0, ), ]
+    _msRangeExpr = [], -- [(1.0, ), ]
+    _msLValue = [], -- [(1.0, ), ]
+    _msAssign = [], -- [(1.0, ), ]
+    _msEventPrim = [], -- [(1.0, ), ]
+    _msDelay1 = [(1.0, delay1ToBase), (1.0, delay1To1)],
+    _msDelay2 = [(1.0, delay2ToBase), (1.0, delay2To1), (1.0, delay2To2)],
+    _msDelay3 = [(1.0, delay3ToBase), (1.0, delay3To1), (1.0, delay3To2), (1.0, delay3To3)],
+    _msLoopStmt = [(1.0, loopForever), (1.0, loopRepeat), (1.0, loopWhile)],
+    _msCasePat = [], -- [(1.0, ), ]
+    _msStmt = [], -- [(1.0, ), ]
+    _msGenCond = [], -- [(1.0, ), ]
+    _msGenBlk = [], -- [(1.0, ), ]
+    _msModGenItem = [], -- [(1.0, ), ]
+    _msModItem = [], -- [(1.0, ), ]
+    _msPDV = [], -- [(1.0, ), ]
+    _msSpecItem = [], -- [(1.0, ), ]
+    _msModule = [], -- [(1.0, ), ]
+    _msPrimTable = [], -- [(1.0, ), ]
+    _msPrimitive = [], -- [(1.0, ), ]
+    _msV2005 = [], -- [(1.0, ), ]
+    _msList = [(1.0, shuffleList)]
+  }
+  where
+    mkPrim = fmap return
 
 mutate :: MutationVector t -> Mutation t
 mutate v x = join $ sampleWeighted $ mapMaybe (traverse ($ x)) v
@@ -119,6 +145,7 @@ mutateCMTM = mutateMTM mutateCExpr
 mutateNMTM :: Mutation (MinTypMax NExpr)
 mutateNMTM = mutateMTM mutateNExpr
 
+-- TODO MAYBE: elaborate expr then mutate
 mutatePrim :: Mutation i -> Mutation r -> Mutation a -> Mutation (Prim i r a)
 mutatePrim fi fr fa = mutateWith _msPrim >=> \x -> case x of
   PrimIdent i r -> PrimIdent <$> fi i <*> fr r
@@ -143,6 +170,7 @@ mutateNDR = mutateDR mutateNExpr
 mutateCDR :: Mutation (DimRange CExpr CExpr)
 mutateCDR = mutateDR mutateCExpr
 
+-- TODO MAYBE: elaborate expr then mutate
 mutateExpr :: Mutation i -> Mutation r -> Mutation a -> Mutation (Expr i r a)
 mutateExpr fi fr fa = mutateWith _msExpr >=> \x -> case x of
   ExprPrim p -> ExprPrim <$> mPrim p
@@ -243,11 +271,11 @@ mutatePO (ParamOver hi v) = ParamOver <$> mutateHI hi <*> mutateCMTM v
 mutateParamAss :: Mutation (ParamAssign NExpr)
 mutateParamAss x = case x of
   ParamPositional l -> ParamPositional <$> mapM mutateNExpr l
-  ParamNamed l -> ParamNamed <$> mapM (traverse $ traverse mutateNMTM) l
+  ParamNamed l -> fmap ParamNamed $ mapM (traverse $ traverse mutateNMTM) l >>= mutateList
 
 mutatePortAss :: Mutation (PortAssign NExpr)
 mutatePortAss x = case x of
-  PortNamed l -> PortNamed <$> mapM (mutateAttrIded $ traverse mutateNExpr) l
+  PortNamed l -> fmap PortNamed $ mapM (mutateAttrIded $ traverse mutateNExpr) l >>= mutateList
   PortPositional l -> PortPositional <$> mapM (mutateAttributed $ traverse mutateNExpr) l
 
 mutateEP :: Mutation (EventPrim NExpr)
@@ -299,7 +327,7 @@ mutateFStmt x = do
     FSLoop ls b -> FSLoop <$> mutateLS ls <*> mutateAFStmt b
     FSBlock h ps b ->
       flip FSBlock ps <$> traverse (traverse $ mapM (mutateAttrIded mutateSBD) >=> mutateList) h
-        <*> mapM mutateAFStmt b
+        <*> (mapM mutateAFStmt b >>= if ps then mutateList else return)
   where
     mutateAFStmt = mutateAttributed mutateFStmt
     mutateMFStmt = mutateAttributed $ traverse mutateFStmt
@@ -326,7 +354,7 @@ mutateStmt = mutateWith _msStmt >=> \x -> case x of
     SProcTimingControl <$> bitraverse mutateD1 mutateEC tec <*> mutateMStmt s
   SBlock h ps b ->
     flip SBlock ps <$> traverse (traverse $ mapM (mutateAttrIded mutateSBD) >=> mutateList) h
-      <*> mapM mutateAStmt b
+      <*> (mapM mutateAStmt b >>= if ps then mutateList else return)
   SSysTaskEnable i args -> SSysTaskEnable i <$> mapM (traverse mutateNExpr) args
   STaskEnable hi args -> STaskEnable <$> mutateHI hi <*> mapM mutateNExpr args
   SWait e s -> SWait <$> mutateNExpr e <*> mutateMStmt s
@@ -623,6 +651,11 @@ mutateV2005 = mutateWith _msV2005 >=> \(Verilog2005 m p c) ->
     <*> (mapM mutatePB p >>= mutateList)
     <*> (mapM mutateCB c >>= mutateList)
 
+runMutation :: Config -> Verilog2005 -> IO Verilog2005
+runMutation c v = do
+  let conf = _configMutation c
+  gen <- maybe createSystemRandom initialize $ _moSeed conf
+  runReaderT (mutateV2005 v) (buildStore conf, gem)
 
 -- Actual mutations
 
@@ -722,13 +755,19 @@ loopForever x = case x of
 
 loopRepeat :: PrimMutation (LoopStatement NExpr CExpr)
 loopRepeat x = case x of
-  LSWhile e | maybe False (/= ZOXO) (EE.evalTruth <$> EE.evalNExprSelfDet e) -> Just $ LSRepeat e -- OR 0 OR Z OR X
+  LSWhile e | maybe False (/= ZOXO) (EE.evalTruth <$> EE.evalNExprSelfDet e) -> Just $ do
+    -- TODO: pull random for e OR 0 OR Z OR X
+    return $ LSRepeat e
   _ -> Nothing
 
 loopWhile :: PrimMutation (LoopStatement NExpr CExpr)
 loopWhile x = case x of
-  LSForever -> Just $ LSWhile $ NExpr $ ExprPrim $ PrimNumber 0 False $ NDecimal 1 -- Any nonfalse
-  LSRepeat e | maybe False (/= ZOXO) (EE.evalTruth <$> EE.evalNExprSelfDet e) -> Just $ LSWhile e -- OR 0 OR Z OR X?
+  LSForever -> Just $ do
+    -- TODO: pull random for non 0 NOR Z NOR X
+    return $ LSWhile $ NExpr $ ExprPrim $ PrimNumber 0 False $ NDecimal 1
+  LSRepeat e | maybe False (/= ZOXO) (EE.evalTruth <$> EE.evalNExprSelfDet e) -> Just $ do
+    -- TODO: pull random for e OR 0 OR Z OR X
+    return $ LSWhile e
   _ -> Nothing
 
 -- loopSForever :: PureMutation Statement
