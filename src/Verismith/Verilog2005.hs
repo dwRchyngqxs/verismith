@@ -14,7 +14,8 @@ module Verismith.Verilog2005
     CategoricalProbability,
     Verilog2005 (..),
     PrintingOpts (..),
-    resolveInsts
+    resolveInsts,
+    runMutation,
   )
 where
 
@@ -24,3 +25,4 @@ import Verismith.Verilog2005.Generator
 import Verismith.Verilog2005.Parser
 import Verismith.Verilog2005.PrettyPrinter
 import Verismith.Verilog2005.Utils
+import Verismith.Verilog2005.Mutation

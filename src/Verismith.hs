@@ -146,7 +146,7 @@ randDelete i = do
   return $ if r then i else 0
 
 randomise :: Config -> IO Config
-randomise config@(Config emi a _ c d e f) = do
+randomise config@(Config emi a _ c d e f g) = do
   mia <- return $ cm ^. probModItemAssign
   misa <- return $ cm ^. probModItemSeqAlways
   mica <- return $ cm ^. probModItemCombAlways
@@ -181,6 +181,7 @@ randomise config@(Config emi a _ c d e f) = do
       d
       e
       f
+      g
   where
     cm = config ^. configProbability . probModItem
     cs = config ^. configProbability . probStmnt
@@ -284,6 +285,12 @@ handleOpts (ShuffleOpt f t o nshuffle nrename noequiv equivdir checker) = do
     fn1 = "rtl1.v"
     fn2 = "rtl2.v"
     mkid f = Verismith.Tool.Identity "" (fromText f)
+handleOpts (Mutate f o c popts) = do
+  config <- getConfig c
+  (ast, warns) <- V2.parseVerilog2005 (T.unpack (toTextIgnore f))
+  mapM_ (hPutStrLn stderr) warns
+  ast' <- V2.runMutation config ast
+  maybe L.putStr L.writeFile o $ V2.genSource (Just 80) popts ast'
 handleOpts (Reduce f t _ ls' False) = do
   src <- parseSourceInfoFile t (toTextIgnore f)
   datadir <- getDataDir

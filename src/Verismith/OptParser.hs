@@ -87,6 +87,12 @@ data Opts
       { distanceOptVerilogA :: !FilePath,
         distanceOptVerilogB :: !FilePath
       }
+  | Mutate
+      { mutateFilename :: !FilePath,
+        mutateOutput :: !(Maybe FilePath),
+        mutateConfigFile :: !(Maybe FilePath),
+        mutatePrinting :: !PrintingOpts
+      }
   | ShuffleOpt
       { shuffleOptFilename :: !FilePath,
         shuffleOptTop :: !Text,
@@ -495,6 +501,29 @@ equivOpts =
               <> Opt.help "Define the checker to use."
         )
 
+mutateOpts :: Parser Opts
+mutateOpts =
+  Mutate
+    <$> ( fromText . T.pack
+            <$> Opt.strArgument
+              (Opt.metavar "FILE" <> Opt.help "Verilog input file.")
+        )
+    <*> ( Opt.optional
+            . Opt.strOption
+            $ Opt.long "output"
+              <> Opt.short 'o'
+              <> Opt.metavar "FILE"
+              <> Opt.help "Output file to write the mutated file to."
+        )
+    <*> ( Opt.optional
+            . Opt.strOption
+            $ Opt.long "config"
+              <> Opt.short 'c'
+              <> Opt.metavar "FILE"
+              <> Opt.help "Config file for the mutation run."
+        )
+    <*> printOpts
+
 argparse :: Parser Opts
 argparse =
   Opt.hsubparser
@@ -560,6 +589,17 @@ argparse =
               )
           )
           <> Opt.metavar "shuffle"
+      )
+    <|> Opt.hsubparser
+      ( Opt.command
+          "mutate"
+          ( Opt.info
+              mutateOpts
+              ( Opt.progDesc
+                  "Mutate a Verilog file."
+              )
+          )
+          <> Opt.metavar "mutate"
       )
     <|> Opt.hsubparser
       ( Opt.command

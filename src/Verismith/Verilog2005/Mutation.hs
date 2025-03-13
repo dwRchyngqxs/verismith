@@ -24,17 +24,18 @@ import Data.List.NonEmpty (NonEmpty)
 import Data.Bifunctor (second)
 import Data.Bitraversable (bitraverse)
 import GHC.IsList
+import System.Random.MWC.Probability
 import Control.Monad
 import Control.Monad.Reader
 import Verismith.Utils (mkpair)
-import Verismith.Config (MutationOpts, Config)
+import Verismith.Config (MutationOpts (..), Config (..))
 import Verismith.Verilog2005.Randomness
 import Verismith.Verilog2005.AST
 import qualified Verismith.Verilog2005.EvalElabAST as EE
 import Verismith.Verilog2005.Utils
 
 data MutationStore = MutationStore
-  { _msMTM :: !(forall t. MutationVector (MinTypMax t)),
+  { _msMTM :: !(forall t. Eq t => MutationVector (MinTypMax t)),
     _msPrim :: !(forall i r a. MutationVector (Prim i r a)),
     _msExpr :: !(forall i r a. MutationVector (Expr i r a)),
     _msAttr :: !(MutationVector Attributes),
@@ -96,7 +97,7 @@ type Mutation t = t -> Mutator t
 -- TODO LATER: options
 buildStore :: MutationOpts -> MutationStore
 buildStore _ = MutationStore {
-    _msMTM = [(1.0, mtmTo1), (1.0, mtmTo3)],
+    _msMTM = [(1.0, mkPrim mtmTo1), (1.0, mkPrim mtmTo3)],
     _msPrim = [], -- [(1.0, ), ]
     _msExpr = [], -- [(1.0, ), ]
     _msAttr = [], -- [(1.0, ), ]
@@ -104,10 +105,15 @@ buildStore _ = MutationStore {
     _msLValue = [], -- [(1.0, ), ]
     _msAssign = [], -- [(1.0, ), ]
     _msEventPrim = [], -- [(1.0, ), ]
-    _msDelay1 = [(1.0, delay1ToBase), (1.0, delay1To1)],
-    _msDelay2 = [(1.0, delay2ToBase), (1.0, delay2To1), (1.0, delay2To2)],
-    _msDelay3 = [(1.0, delay3ToBase), (1.0, delay3To1), (1.0, delay3To2), (1.0, delay3To3)],
-    _msLoopStmt = [(1.0, loopForever), (1.0, loopRepeat), (1.0, loopWhile)],
+    _msDelay1 = [(1.0, mkPrim delay1ToBase), (1.0, mkPrim delay1To1)],
+    _msDelay2 = [(1.0, mkPrim delay2ToBase), (1.0, mkPrim delay2To1), (1.0, mkPrim delay2To2)],
+    _msDelay3 =
+      [ (1.0, mkPrim delay3ToBase),
+        (1.0, mkPrim delay3To1),
+        (1.0, mkPrim delay3To2),
+        (1.0, mkPrim delay3To3)
+      ],
+    _msLoopStmt = [(1.0, mkPrim loopForever), (1.0, loopRepeat), (1.0, loopWhile)],
     _msCasePat = [], -- [(1.0, ), ]
     _msStmt = [], -- [(1.0, ), ]
     _msGenCond = [], -- [(1.0, ), ]
@@ -123,7 +129,7 @@ buildStore _ = MutationStore {
     _msList = [(1.0, shuffleList)]
   }
   where
-    mkPrim = fmap return
+    mkPrim f = fmap pure . f
 
 mutate :: MutationVector t -> Mutation t
 mutate v x = join $ sampleWeighted $ mapMaybe (traverse ($ x)) v
@@ -134,7 +140,7 @@ mutateWith p x = asks (p . fst) >>= flip mutate x
 mutateList :: IsList t => Mutation t
 mutateList l = fromList <$> mutateWith _msList (toList l)
 
-mutateMTM :: Mutation t -> Mutation (MinTypMax t)
+mutateMTM :: Eq t => Mutation t -> Mutation (MinTypMax t)
 mutateMTM f = mutateWith _msMTM >=> \x -> case x of
   MTMSingle e -> MTMSingle <$> f e
   MTMFull em et eM -> MTMFull <$> f em <*> f et <*> f eM
@@ -146,7 +152,7 @@ mutateNMTM :: Mutation (MinTypMax NExpr)
 mutateNMTM = mutateMTM mutateNExpr
 
 -- TODO MAYBE: elaborate expr then mutate
-mutatePrim :: Mutation i -> Mutation r -> Mutation a -> Mutation (Prim i r a)
+mutatePrim :: (Eq i, Eq r, Eq a) => Mutation i -> Mutation r -> Mutation a -> Mutation (Prim i r a)
 mutatePrim fi fr fa = mutateWith _msPrim >=> \x -> case x of
   PrimIdent i r -> PrimIdent <$> fi i <*> fr r
   PrimConcat c -> PrimConcat <$> mapM mExpr c
@@ -171,7 +177,7 @@ mutateCDR :: Mutation (DimRange CExpr CExpr)
 mutateCDR = mutateDR mutateCExpr
 
 -- TODO MAYBE: elaborate expr then mutate
-mutateExpr :: Mutation i -> Mutation r -> Mutation a -> Mutation (Expr i r a)
+mutateExpr :: (Eq i, Eq r, Eq a) => Mutation i -> Mutation r -> Mutation a -> Mutation (Expr i r a)
 mutateExpr fi fr fa = mutateWith _msExpr >=> \x -> case x of
   ExprPrim p -> ExprPrim <$> mPrim p
   ExprUnOp op a p -> ExprUnOp op <$> fa a <*> mPrim p
@@ -655,7 +661,7 @@ runMutation :: Config -> Verilog2005 -> IO Verilog2005
 runMutation c v = do
   let conf = _configMutation c
   gen <- maybe createSystemRandom initialize $ _moSeed conf
-  runReaderT (mutateV2005 v) (buildStore conf, gem)
+  runReaderT (mutateV2005 v) (buildStore conf, gen)
 
 -- Actual mutations
 

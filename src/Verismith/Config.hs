@@ -55,6 +55,10 @@ module Verismith.Config
     GarbageIdentifierOpts (..),
     defGarbageOpts,
 
+    -- ** ConfMutation
+    MutationOpts (..),
+    defMutationOpts,
+
     -- ** Simulator Description
     SimDescription (..),
 
@@ -764,6 +768,15 @@ defGarbageOpts =
       _goBareMinTypMax = 0.5
     }
 
+data MutationOpts = MutationOpts
+  { _moSeed :: !(Maybe (VU.Vector Word32)),
+    _moIdentity :: !Double
+  }
+  deriving (Eq, Show)
+
+defMutationOpts :: MutationOpts
+defMutationOpts = MutationOpts Nothing 1.0
+
 data Info = Info
   { -- | @commit@: the hash of the commit that was compiled.
     _infoCommit :: !Text,
@@ -797,6 +810,7 @@ data Config = Config
     _configProbability :: {-# UNPACK #-} !Probability,
     _configProperty :: {-# UNPACK #-} !ConfProperty,
     _configGarbageGenerator :: {-# UNPACK #-} !GarbageOpts,
+    _configMutation :: {-# UNPACK #-} !MutationOpts,
     _configSimulators :: [SimDescription],
     _configSynthesisers :: [SynthDescription]
   }
@@ -885,6 +899,7 @@ defaultConfig =
     (Probability defModItem defStmnt defExpr defMod)
     (ConfProperty 20 Nothing 3 2 5 "random" 10 False 0 1 Nothing)
     defGarbageOpts
+    defMutationOpts
     []
     [fromYosys defaultYosys, fromVivado defaultVivado]
   where
@@ -1391,6 +1406,12 @@ garbageCodec =
     tfield p n c = defaultValue (p $ _configGarbageGenerator defaultConfig) (Toml.table c n) .= p
     dfield p n = defaultValue (p $ _configGarbageGenerator defaultConfig) (Toml.double n) .= p
 
+mutationCodec :: TomlCodec MutationOpts
+mutationCodec =
+  MutationOpts
+    <$> Toml.dioptional (Toml.read "seed") .= _moSeed
+    <*> defaultValue (_moIdentity $ _configMutation defaultConfig) (Toml.double "identity") .= _moIdentity
+
 simulator :: TomlCodec SimDescription
 simulator = Toml.textBy pprint parseIcarus "name"
   where
@@ -1437,34 +1458,15 @@ infoCodec =
 configCodec :: TomlCodec Config
 configCodec =
   Config
-    <$> defaultValue
-      (defaultConfig ^. configEMI)
-      (Toml.table emiCodec "emi")
-    .= _configEMI
-    <*> defaultValue
-      (defaultConfig ^. configInfo)
-      (Toml.table infoCodec "info")
-    .= _configInfo
-    <*> defaultValue
-      (defaultConfig ^. configProbability)
-      (Toml.table probCodec "probability")
-    .= _configProbability
-    <*> defaultValue
-      (defaultConfig ^. configProperty)
-      (Toml.table propCodec "property")
-    .= _configProperty
-    <*> defaultValue
-      (defaultConfig ^. configGarbageGenerator)
-      (Toml.table garbageCodec "invalid_generator")
-    .= _configGarbageGenerator
-    <*> defaultValue
-      (defaultConfig ^. configSimulators)
-      (Toml.list simulator "simulator")
-    .= _configSimulators
-    <*> defaultValue
-      (defaultConfig ^. configSynthesisers)
-      (Toml.list synthesiser "synthesiser")
-    .= _configSynthesisers
+    <$> mkDefault _configEMI (Toml.table emiCodec "emi")
+    <*> mkDefault _configInfo (Toml.table infoCodec "info")
+    <*> mkDefault _configProbability (Toml.table probCodec "probability")
+    <*> mkDefault _configProperty (Toml.table propCodec "property")
+    <*> mkDefault _configGarbageGenerator (Toml.table garbageCodec "invalid_generator")
+    <*> mkDefault _configMutation (Toml.table mutationCodec "mutation")
+    <*> mkDefault _configSimulators (Toml.list simulator "simulator")
+    <*> mkDefault _configSynthesisers (Toml.list synthesiser "synthesiser")
+  where mkDefault p c = defaultValue (p defaultConfig) c .= p
 
 parseConfigFile :: FilePath -> IO (Either Text Config)
 parseConfigFile fp = do
