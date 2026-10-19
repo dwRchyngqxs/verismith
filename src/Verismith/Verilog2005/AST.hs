@@ -343,12 +343,15 @@ data Expr i r a
 instance (Data i, Data r, Data a) => Plated (Expr i r a) where
   plate = uniplate
 
+-- Constant expressions
 newtype CExpr = CExpr (Expr Identifier (Maybe (RangeExpr CExpr CExpr)) Attributes)
   deriving (Show, Eq, Data, Generic)
 
+-- Normal expressions
 newtype NExpr = NExpr (Expr (HierIdent CExpr) (Maybe (DimRange NExpr CExpr)) Attributes)
   deriving (Show, Eq, Data, Generic)
 
+-- Module path condition expressions
 type MPExpr = Expr Identifier () Attributes
 
 -- | Attributes which can be set to various nodes in the AST.

@@ -44,7 +44,7 @@ $all = [\0-\255]
 
 -- | Comments and white space
 @oneLineComment = "//" .*
-@blockComment   = "/*" [$all # \*]* (\*+ [$all # [\*\/]] [$all # \*]*)* \*+ \/
+@blockComment   = "/*" [$all # \*]* \*+ ([$all # [\*\/]] [$all # \*]* \*+)* \/
 
 -- | Operators
 @unaryOperator     = [~!] | "~&" | "~|"
@@ -349,7 +349,7 @@ xz :: SBS.ByteString -> Token
 xz s = LitXZ $ let c = SBS.head s in c == c2w 'x' || c == c2w 'X'
 
 decimal :: SBS.ByteString -> Token
-decimal = LitDecimal . read . unpackChars
+decimal = LitDecimal . read . filter ('_' /=) . unpackChars
 
 unbxz :: SBS.ByteString -> BXZ
 unbxz s = case s of "0" -> BXZ0; "1" -> BXZ1; "x" -> BXZX; "X" -> BXZX; "z" -> BXZZ; "Z" -> BXZZ
