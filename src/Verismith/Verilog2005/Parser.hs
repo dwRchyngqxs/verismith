@@ -929,11 +929,11 @@ taskFun zeroarg arglb = do
   l <- optionMaybe $
     parens $ ww "function ports" $ concat <$> csl (NE.toList <$> labranch (arglb True))
   consume SymSemi
-  let dp = case l of
-        Nothing -> maplaproduce (<* consume SymSemi) (arglb False) ++ sbd
-        Just _ -> sbd
+  let (il, dp) = case l of
+        Nothing -> ([], maplaproduce (<* consume SymSemi) (arglb False) ++ sbd)
+        Just il -> (il, sbd)
   (d, b) <- smanythen attributes (fmap NE.toList . joinWith (lproduce dp)) trOptStmt
-  ww "function declarations" $ pure d
+  ad <- ww "function declarations" $ pure $ il ++ concat d
   case b of
     [x] -> pure ()
     _ -> do
@@ -941,7 +941,7 @@ taskFun zeroarg arglb = do
       warn pos $
         printf "No or multiple statements in a %s is a SystemVerilog feature" $
           if zeroarg then "function" else "task" :: String
-  return (concat d, b)
+  return (ad, b)
   where
     sbd = maplabranch (fmap $ fmap TFBDStd) stdBlockDecl
     ww s = if zeroarg then id else wempty s
