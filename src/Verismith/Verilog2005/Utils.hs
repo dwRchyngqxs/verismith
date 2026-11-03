@@ -33,6 +33,7 @@ module Verismith.Verilog2005.Utils
     fromMGBlockedItem1,
     fromMGBlockedItem_add,
     fromMGBlockedItem,
+    dnt2nt,
     resolveInsts,
     fitSz,
     fitSnSz,
@@ -40,6 +41,7 @@ module Verismith.Verilog2005.Utils
 where
 
 import Control.Lens ((%~))
+import Control.Monad (join)
 import Data.Data.Lens (biplate)
 import Numeric.Natural
 import Text.Printf (printf)
@@ -189,32 +191,27 @@ unconstDR (DimRange dim rng) = DimRange (map unconstExpr dim) (unconstRange rng)
 
 -- | converts variable lvalue into net lvalue
 constifyLV :: LValue NExpr CExpr -> Maybe (LValue CExpr CExpr)
-constifyLV v = case v of
-  LVSingle hi mdr -> LVSingle hi <$> maybe (Just Nothing) (fmap Just . constifyDR) mdr
-  LVConcat l -> LVConcat <$> mapM constifyLV l
+constifyLV =
+  mapM $ \(LVSingle hi mdr) -> LVSingle hi <$> maybe (Just Nothing) (fmap Just . constifyDR) mdr
 
 -- | the other way
 unconstLV :: LValue CExpr CExpr -> LValue NExpr CExpr
-unconstLV n = case n of
-  LVSingle hi dr -> LVSingle hi (unconstDR <$> dr)
-  LVConcat l -> LVConcat (NE.map unconstLV l)
+unconstLV = NE.map $ \(LVSingle hi dr) -> LVSingle hi (unconstDR <$> dr)
 
 -- | converts expression into net lvalue
 expr2netlv :: NExpr -> Maybe (LValue CExpr CExpr)
 expr2netlv (NExpr x) = aux x
   where
     aux x = case x of
-      ExprPrim (PrimConcat c) -> LVConcat <$> mapM aux c
-      ExprPrim (PrimIdent s sub) -> LVSingle s <$> maybe (Just Nothing) (Just . constifyDR) sub
+      ExprPrim (PrimConcat c) -> join <$> mapM aux c
+      ExprPrim (PrimIdent s sub) ->
+        (\x -> LVSingle s x :| []) <$> maybe (Just Nothing) (Just . constifyDR) sub
       _ -> Nothing
 
 -- | the other way
 netlv2expr :: LValue CExpr CExpr -> NExpr
-netlv2expr = NExpr . aux
-  where
-    aux x = case x of
-      LVConcat e -> ExprPrim $ PrimConcat $ NE.map aux e
-      LVSingle s dr -> ExprPrim $ PrimIdent s $ unconstDR <$> dr
+netlv2expr = NExpr . ExprPrim . PrimConcat . NE.map
+  (\(LVSingle s dr) -> ExprPrim $ PrimIdent s $ unconstDR <$> dr)
 
 -- | Converts Function statements to statements
 toStatement :: FunctionStatement e ce -> Statement e ce
@@ -480,6 +477,21 @@ fromMGBlockedItem ::
   [Attributed (ModGenBlockedItem NExpr CExpr)] -> [Attributed (ModGenSingleItem NExpr CExpr)]
 fromMGBlockedItem =
   nonEmpty [] $ toList . regroup (fmap fromMGBlockedItem1) (addAttributed fromMGBlockedItem_add)
+
+-- | Converts Default Net Types to Net Types
+dnt2nt :: (NetType -> x) -> x -> x -> DefaultNetType -> x
+dnt2nt f tri none dnt = case dnt of
+  DNTTrireg -> tri
+  DNTNone -> none
+  DNTTri -> f NTTri
+  DNTTriAnd -> f NTTriAnd
+  DNTTriOr -> f NTTriOr
+  DNTTri1 -> f NTTri1
+  DNTTri0 -> f NTTri0
+  DNTUwire -> f NTUwire
+  DNTWire -> f NTWire
+  DNTWAnd -> f NTWAnd
+  DNTWOr -> f NTWOr
 
 -- | Resolves Module and Primitive instantiation if possible
 -- | Also checks there are no duplicate toplevel elements

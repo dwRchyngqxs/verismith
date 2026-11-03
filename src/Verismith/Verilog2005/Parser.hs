@@ -552,7 +552,7 @@ hierIdent safety = parseBS >>= trHierIdent safety
 
 -- | Lvalues
 lval :: Parser (Maybe (DimRange e CExpr)) -> Parser (LValue e CExpr)
-lval p = LVConcat <$> bcsl1 (lval p) <|> liftA2 LVSingle (hierIdent True) p
+lval p = join <$> bcsl1 (lval p) <|> liftA2 (\hi dr -> LVSingle hi dr :| []) (hierIdent True) p
 
 netLV :: Parser (LValue CExpr CExpr)
 netLV = lval cDimRange
@@ -848,13 +848,13 @@ statement = fpbranch $ \p t -> case t of
       SSysTaskEnable s <$> option [] (NE.toList <$> pcsl1 (optionMaybe nExpr)) <* consume SymSemi
   IdSimple s -> Just $ blockassortask s
   IdEscaped s -> Just $ blockassortask s
-  SymBraceL -> Just $ (LVConcat <$> csl1 varLV <* closeConsume p SymBraceL SymBraceR) >>= blockass
+  SymBraceL -> Just $ (join <$> csl1 varLV <* closeConsume p SymBraceL SymBraceR) >>= blockass
   _ -> Nothing
   where
     stmtLoop ls = SLoop ls <$> attrStmt
     blockassortask s = do
       hi <- trHierIdent True s
-      (nDimRange >>= blockass . LVSingle hi)
+      (nDimRange >>= blockass . (:| []) . LVSingle hi)
         <|> do
           args <- option [] $ parens $ wempty "task argument" $ csl nExpr
           consume SymSemi
@@ -1338,7 +1338,7 @@ type PortInterface = Identified [Identified (Maybe (RangeExpr CExpr CExpr))]
 
 -- | Simple port declaration (Input, Output, InOut)
 portsimple ::
-  Maybe NetType ->
+  DefaultNetType ->
   Bool ->
   Dir ->
   Attributes ->
@@ -1348,19 +1348,18 @@ portsimple dnt fullspec d a = do
   sr <- signRange
   sl <- scsl1 fullspec ident pure
   let pd i = MIPort $ AttrIded a i (d, sr)
-      nd t i =
-        Attributed [] $
-          MGINetDecl
-            t
-            (NetProp (_srSign sr) ((,) Nothing <$> _srRange sr) Nothing)
-            (Identity $ NetDecl i [])
+      np = NetProp (_srSign sr) ((,) Nothing <$> _srRange sr) Nothing
+      nd i = Identity $ NetDecl i []
       pi i = Identified i [Identified i Nothing]
+      ps t i = ([pd i, MIMGI $ Attributed [] $ MGINetDecl t np $ nd i], pi i)
   case nt of
-    Just nt -> return $ (\i -> ([pd i, MIMGI $ nd nt i], pi i)) <$> sl
-    Nothing | fullspec -> case dnt of
-      Just nt -> return $ (\i -> ([pd i, MIMGI $ nd nt i], pi i)) <$> sl
-      Nothing ->
-        hardfail "Ports declared in a module header must be typed when default_nettype is none"
+    Just nt -> return $ ps nt <$> sl
+    Nothing | fullspec ->
+      dnt2nt
+        (\nt -> return $ ps nt <$> sl)
+        (return $ (\i -> ([pd i, MIMGI $ Attributed [] $ MGITriC CSMedium np $ nd i], pi i)) <$> sl)
+        (hardfail "Ports declared in a module header must be typed when default_nettype is none")
+        dnt
     Nothing -> return $ (\i -> ([pd i], pi i)) <$> sl
 
 -- | Declaration of a port with a variable type
@@ -1386,7 +1385,7 @@ portvariable fullspec a f =
 
 -- | Port declaration
 portDecl ::
-  Maybe NetType ->
+  DefaultNetType ->
   Bool ->
   LABranch (NonEmpty (ModuleItem NExpr CExpr MPExpr), NonEmpty PortInterface)
 portDecl dnt fullspec =
@@ -1848,18 +1847,24 @@ config = do
 -- | Parses compiler directives
 compDir :: Parser ()
 compDir = fbranch $ \t -> case t of
-  CDUnconnecteddrive ->
-    Just $
-      fbranch $
-        \t -> case t of
-          KWPull0 -> Just $ modifyState $ lcdPull .~ Just False
-          KWPull1 -> Just $ modifyState $ lcdPull .~ Just True
-          _ -> Nothing
+  CDUnconnecteddrive -> Just $ do
+    b <- fproduce $ \t -> case t of KWPull0 -> Just $ False; KWPull1 -> Just $ True; _ -> Nothing
+    modifyState $ lcdPull .~ Just b
   CDNounconnecteddrive -> Just $ modifyState $ lcdPull .~ Nothing
   CDDefaultnettype -> Just $ do
-    nt <-
-      Just <$> fproduce (\t -> IntMap.lookup (getConsIndex t) $ mkActionMap netType)
-        <|> fproduce (\t -> if t == IdSimple "none" then Just Nothing else Nothing)
+    nt <- fproduce $ \t -> case t of
+      IdSimple "none" -> Just DNTNone
+      KWTrireg -> Just DNTTrireg
+      KWTri -> Just DNTTri
+      KWTriand -> Just DNTTriAnd
+      KWTrior -> Just DNTTriOr
+      KWTri0 -> Just DNTTri0
+      KWTri1 -> Just DNTTri1
+      KWUwire -> Just DNTUwire
+      KWWire -> Just DNTWire
+      KWWand -> Just DNTWAnd
+      KWWor -> Just DNTWOr
+      _ -> Nothing
     modifyState $ lcdDefNetType .~ nt
   CDResetall -> Just $ putState lcdDefault
   CDTimescale -> Just $ do

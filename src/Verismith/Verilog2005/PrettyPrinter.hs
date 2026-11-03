@@ -48,13 +48,13 @@ data LocalCompDir = LocalCompDir
   { _lcdTimescale :: !(Maybe (Int, Int)),
     _lcdCell :: !Bool,
     _lcdPull :: !(Maybe Bool),
-    _lcdDefNetType :: !(Maybe NetType)
+    _lcdDefNetType :: !DefaultNetType
   }
 
 $(makeLenses ''LocalCompDir)
 
 lcdDefault :: LocalCompDir
-lcdDefault = LocalCompDir Nothing False Nothing $ Just NTWire
+lcdDefault = LocalCompDir Nothing False Nothing DNTWire
 
 -- | Pretty-printer options
 data PrintingOpts = PrintingOpts
@@ -434,11 +434,13 @@ prettyDelay1 x =
     D11 m -> padj prettyNMTM m >>= mkid . par
 
 prettyLValue :: PrettyIdent e -> PrettyIdent (LValue e CExpr)
-prettyLValue f x = case x of
-  LVSingle hi r -> do
-    rng <- pm (fmap group . prettyDimRange f) r
-    first nest <$> padjWith prettyHierIdent rng hi
-  LVConcat l -> bcslid1 (prettyLValue f) l >>= mkid
+prettyLValue f (h :| t) = case t of
+  [] -> p h
+  _ -> bcslid1 p (h :| t) >>= mkid
+  where
+    p (LVSingle hi r) = do
+      rng <- pm (fmap group . prettyDimRange f) r
+      first nest <$> padjWith prettyHierIdent rng hi
 
 prettyNetLV :: PrettyIdent (LValue CExpr CExpr)
 prettyNetLV = prettyLValue prettyCExpr
@@ -1188,7 +1190,7 @@ prettyModuleBlock (LocalCompDir ts c p dn) (ModuleBlock a mm i pi b mts mc mp md
             Just b -> "`unconnected_drive pull" <> if b then "1" else "0"
         )
         (p == mp)
-    ddn = piff ("`default_nettype" <+> maybe "none" viaShow mdn) (dn == mdn)
+    ddn = piff ("`default_nettype" <+> viaShow mdn) (dn == mdn)
   return
     (dts <?#> dcd <?#> dud <?#> ddn <?#> block header "endmodule" body, LocalCompDir mts mc mp mdn)
   where

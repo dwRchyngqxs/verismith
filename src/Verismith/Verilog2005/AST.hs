@@ -39,12 +39,14 @@ module Verismith.Verilog2005.AST
     Dir (..),
     AbsType (..),
     ComType (..),
+    DefaultNetType (..),
     NetType (..),
     Strength (..),
     DriveStrength (..),
     dsDefault,
     ChargeStrength (..),
-    LValue (..),
+    LVSingle (..),
+    LValue,
     Assign (..),
     Parameter (..),
     ParamOver (..),
@@ -465,6 +467,35 @@ data ComType t ce
     }
   deriving (Show, Eq, Data, Generic)
 
+-- | Default Net type
+data DefaultNetType
+  = DNTNone
+  | DNTTrireg
+  | DNTTri
+  | DNTTriAnd
+  | DNTTriOr
+  | DNTTri1
+  | DNTTri0
+  | DNTUwire
+  | DNTWire
+  | DNTWAnd
+  | DNTWOr
+  deriving (Eq, Bounded, Enum, Data, Generic)
+
+instance Show DefaultNetType where
+  show x = case x of
+    DNTNone -> "none"
+    DNTTrireg -> "trireg"
+    DNTTri -> "tri"
+    DNTTriAnd -> "triand"
+    DNTTriOr -> "trior"
+    DNTTri1 -> "tri1"
+    DNTTri0 -> "tri0"
+    DNTUwire -> "uwire"
+    DNTWire -> "wire"
+    DNTWAnd -> "wand"
+    DNTWOr -> "wor"
+
 -- | Net type
 data NetType
   = NTSupply1
@@ -526,13 +557,13 @@ instance Show ChargeStrength where
   show x = case x of CSSmall -> "(small)"; CSMedium -> "(medium)"; CSLarge -> "(large)"
 
 -- | Left side of assignments
-data LValue et ce
-  = LVSingle
-      { _lvIdent :: !(HierIdent ce),
-        _lvDimRange :: !(Maybe (DimRange et ce))
-      }
-  | LVConcat !(NonEmpty (LValue et ce))
+data LVSingle et ce = LVSingle
+  { _lvIdent :: !(HierIdent ce),
+    _lvDimRange :: !(Maybe (DimRange et ce))
+  }
   deriving (Show, Eq, Data, Generic)
+
+type LValue et ce = NonEmpty (LVSingle et ce)
 
 -- | Assignment
 data Assign et ce e = Assign {_aLValue :: !(LValue et ce), _aValue :: !e}
@@ -1183,7 +1214,7 @@ data ModuleBlock e ce mpe = ModuleBlock
     _mbTimescale :: !(Maybe (Int, Int)),
     _mbCell :: !Bool,
     _mbPull :: !(Maybe Bool),
-    _mbDefNetType :: !(Maybe NetType)
+    _mbDefNetType :: !DefaultNetType
   }
   deriving (Show, Eq, Data, Generic)
 

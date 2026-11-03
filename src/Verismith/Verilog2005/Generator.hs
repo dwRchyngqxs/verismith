@@ -396,11 +396,8 @@ garbageDelay3 =
     ]
 
 garbageLValue :: GenM' et -> GenM' (LValue et CExpr)
-garbageLValue ge = do
-  l <- repeatExprRecursive _goLValues $ garbageLValue ge
-  case l of
-    [] -> LVSingle <$> garbageHierIdent <*> sampleMaybe _goOptionalLValue (garbageDimRange ge)
-    h : t -> return $ LVConcat $ h :| t
+garbageLValue ge = (:|) <$> g <*> repeatExprRecursive _goLValues g
+  where g = LVSingle <$> garbageHierIdent <*> sampleMaybe _goOptionalLValue (garbageDimRange ge)
 
 garbageNetLV :: GenM' (LValue CExpr CExpr)
 garbageNetLV = garbageLValue garbageCExpr
@@ -950,7 +947,7 @@ garbageModuleBlock ts = do
     <*> (if ts then Just <$> mkpair gts gts else pure Nothing)
     <*> sampleBernoulli (m _gmoCell)
     <*> sampleMaybeEnum (m _gmoUnconnectedDrive)
-    <*> sampleMaybeEnum (m _gmoDefaultNetType)
+    <*> sampleEnum (m _gmoDefaultNetType)
   where
     m x = x . _goModule
     gts = sampleSegment (m _gmoTimeMagnitude) (-15) 2

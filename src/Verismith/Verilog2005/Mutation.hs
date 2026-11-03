@@ -132,7 +132,7 @@ buildStore _ = MutationStore {
     mkPrim f = fmap pure . f
 
 mutate :: MutationVector t -> Mutation t
-mutate v x = join $ sampleWeighted $ mapMaybe (traverse ($ x)) v
+mutate v x = join $ sampleWeighted $ mapMaybe (mapM ($ x)) v
 
 mutateWith :: (MutationStore -> MutationVector t) -> Mutation t
 mutateWith p x = asks (p . fst) >>= flip mutate x
@@ -157,7 +157,7 @@ mutatePrim fi fr fa = mutateWith _msPrim >=> \x -> case x of
   PrimIdent i r -> PrimIdent <$> fi i <*> fr r
   PrimConcat c -> PrimConcat <$> mapM mExpr c
   PrimMultConcat m c ->
-    PrimMultConcat <$> mutateExpr pure (traverse mutateCRE) fa m <*> mapM mExpr c
+    PrimMultConcat <$> mutateExpr pure (mapM mutateCRE) fa m <*> mapM mExpr c
   PrimFun i a args -> PrimFun <$> fi i <*> fa a <*> mapM mExpr args
   PrimSysFun i args -> PrimSysFun i <$> mapM mExpr args
   PrimMinTypMax m -> PrimMinTypMax <$> mutateMTM mExpr m
@@ -165,7 +165,7 @@ mutatePrim fi fr fa = mutateWith _msPrim >=> \x -> case x of
   where mExpr = mutateExpr fi fr fa
 
 mutateHI :: Mutation (HierIdent CExpr)
-mutateHI (HierIdent p i) = flip HierIdent i <$> mapM (traverse $ traverse mutateCExpr) p
+mutateHI (HierIdent p i) = flip HierIdent i <$> mapM (mapM $ mapM mutateCExpr) p
 
 mutateDR :: Mutation e -> Mutation (DimRange e CExpr)
 mutateDR f (DimRange d r) = DimRange <$> mapM f d <*> mutateRE f r
@@ -188,15 +188,15 @@ mutateExpr fi fr fa = mutateWith _msExpr >=> \x -> case x of
     mPrim = mutatePrim fi fr fa
 
 mutateCExpr :: Mutation CExpr
-mutateCExpr (CExpr e) = CExpr <$> mutateExpr pure (traverse mutateCRE) mutateAttr e
+mutateCExpr (CExpr e) = CExpr <$> mutateExpr pure (mapM mutateCRE) mutateAttr e
 
 mutateNExpr :: Mutation NExpr
-mutateNExpr (NExpr e) = NExpr <$> mutateExpr mutateHI (traverse mutateNDR) mutateAttr e
+mutateNExpr (NExpr e) = NExpr <$> mutateExpr mutateHI (mapM mutateNDR) mutateAttr e
 
 mutateAttr :: Mutation Attributes
 mutateAttr = mutateWith _msAttr >=> mutateList >=> mapM (mapM mAttr)
   where
-    mAttr (Attribute i v) = Attribute i <$> traverse (mutateExpr pure (traverse mutateCRE) pure) v
+    mAttr (Attribute i v) = Attribute i <$> mapM (mutateExpr pure (mapM mutateCRE) pure) v
 
 mutateAttributed :: Mutation t -> Mutation (Attributed t)
 mutateAttributed f (Attributed a x) = Attributed <$> mutateAttr a <*> f x
@@ -238,10 +238,10 @@ mutateD1 = mutateWith _msDelay1 >=> \x -> case x of
   _ -> pure x
 
 mutateSR :: Mutation (SignRange CExpr)
-mutateSR (SignRange sn r) = SignRange sn <$> traverse mutateR2 r
+mutateSR (SignRange sn r) = SignRange sn <$> mapM mutateR2 r
 
 mutateST :: Mutation (SpecTerm CExpr)
-mutateST (SpecTerm i r) = SpecTerm i <$> traverse mutateCRE r
+mutateST (SpecTerm i r) = SpecTerm i <$> mapM mutateCRE r
 
 mutateCT :: Mutation (ComType t CExpr)
 mutateCT x = case x of
@@ -249,9 +249,8 @@ mutateCT x = case x of
   _ -> pure x
 
 mutateLV :: Mutation e -> Mutation (LValue e CExpr)
-mutateLV f = mutateWith _msLValue >=> \x -> case x of
-  LVSingle hi dr -> LVSingle <$> mutateHI hi <*> traverse (mutateDR f) dr
-  LVConcat l -> LVConcat <$> mapM (mutateLV f) l
+mutateLV f = mutateWith _msLValue >=>
+  mapM (\(LVSingle hi dr) -> LVSingle <$> mutateHI hi <*> mapM (mutateDR f) dr)
 
 mutateNLV :: Mutation (LValue CExpr CExpr)
 mutateNLV = mutateLV mutateCExpr
@@ -277,12 +276,12 @@ mutatePO (ParamOver hi v) = ParamOver <$> mutateHI hi <*> mutateCMTM v
 mutateParamAss :: Mutation (ParamAssign NExpr)
 mutateParamAss x = case x of
   ParamPositional l -> ParamPositional <$> mapM mutateNExpr l
-  ParamNamed l -> fmap ParamNamed $ mapM (traverse $ traverse mutateNMTM) l >>= mutateList
+  ParamNamed l -> fmap ParamNamed $ mapM (mapM $ mapM mutateNMTM) l >>= mutateList
 
 mutatePortAss :: Mutation (PortAssign NExpr)
 mutatePortAss x = case x of
-  PortNamed l -> fmap PortNamed $ mapM (mutateAttrIded $ traverse mutateNExpr) l >>= mutateList
-  PortPositional l -> PortPositional <$> mapM (mutateAttributed $ traverse mutateNExpr) l
+  PortNamed l -> fmap PortNamed $ mapM (mutateAttrIded $ mapM mutateNExpr) l >>= mutateList
+  PortPositional l -> PortPositional <$> mapM (mutateAttributed $ mapM mutateNExpr) l
 
 mutateEP :: Mutation (EventPrim NExpr)
 mutateEP = mutateWith _msEventPrim >=> \(EventPrim p e) -> EventPrim p <$> mutateNExpr e
@@ -332,15 +331,15 @@ mutateFStmt x = do
     FSDisable hi -> FSDisable <$> mutateHI hi
     FSLoop ls b -> FSLoop <$> mutateLS ls <*> mutateAFStmt b
     FSBlock h ps b ->
-      flip FSBlock ps <$> traverse (traverse $ mapM (mutateAttrIded mutateSBD) >=> mutateList) h
+      flip FSBlock ps <$> mapM (mapM $ mapM (mutateAttrIded mutateSBD) >=> mutateList) h
         <*> (mapM mutateAFStmt b >>= if ps then mutateList else return)
   where
     mutateAFStmt = mutateAttributed mutateFStmt
-    mutateMFStmt = mutateAttributed $ traverse mutateFStmt
+    mutateMFStmt = mutateAttributed $ mapM mutateFStmt
 
 mutateStmt :: Mutation (Statement NExpr CExpr)
 mutateStmt = mutateWith _msStmt >=> \x -> case x of
-  SBlockAssign b ass dec -> SBlockAssign b <$> mutateVAss ass <*> traverse mutateDEC dec
+  SBlockAssign b ass dec -> SBlockAssign b <$> mutateVAss ass <*> mapM mutateDEC dec
   SCase zox e b d ->
     SCase zox <$> mutateNExpr e
       <*> ( mapM
@@ -359,9 +358,9 @@ mutateStmt = mutateWith _msStmt >=> \x -> case x of
   SProcTimingControl tec s ->
     SProcTimingControl <$> bitraverse mutateD1 mutateEC tec <*> mutateMStmt s
   SBlock h ps b ->
-    flip SBlock ps <$> traverse (traverse $ mapM (mutateAttrIded mutateSBD) >=> mutateList) h
+    flip SBlock ps <$> mapM (mapM $ mapM (mutateAttrIded mutateSBD) >=> mutateList) h
       <*> (mapM mutateAStmt b >>= if ps then mutateList else return)
-  SSysTaskEnable i args -> SSysTaskEnable i <$> mapM (traverse mutateNExpr) args
+  SSysTaskEnable i args -> SSysTaskEnable i <$> mapM (mapM mutateNExpr) args
   STaskEnable hi args -> STaskEnable <$> mutateHI hi <*> mapM mutateNExpr args
   SWait e s -> SWait <$> mutateNExpr e <*> mutateMStmt s
 
@@ -369,10 +368,10 @@ mutateAStmt :: Mutation (Attributed (Statement NExpr CExpr))
 mutateAStmt = mutateAttributed mutateStmt
 
 mutateMStmt :: Mutation (Attributed (Maybe (Statement NExpr CExpr)))
-mutateMStmt = mutateAttributed $ traverse mutateStmt
+mutateMStmt = mutateAttributed $ mapM mutateStmt
 
 mutateNP :: Mutation (NetProp NExpr CExpr)
-mutateNP (NetProp sn v d) = NetProp sn <$> traverse (traverse mutateR2) v <*> traverse mutateD3 d
+mutateNP (NetProp sn v d) = NetProp sn <$> mapM (mapM mutateR2) v <*> mapM mutateD3 d
 
 mutateND :: Mutation (NetDecl CExpr)
 mutateND (NetDecl i r2) = NetDecl i <$> mapM mutateR2 r2
@@ -392,7 +391,7 @@ mutateBD ff ft x = case x of
 
 mutateSBD :: Mutation (StdBlockDecl CExpr)
 mutateSBD x = case x of
-  SBDBlockDecl bd -> SBDBlockDecl <$> mutateBD traverse (mapM mutateR2) bd
+  SBDBlockDecl bd -> SBDBlockDecl <$> mutateBD mapM (mapM mutateR2) bd
   SBDParameter p -> SBDParameter <$> mutateParam p
 
 mutateTFBD :: Mutation (TFBlockDecl t CExpr)
@@ -416,11 +415,11 @@ mutateGCB x = case x of
   _ -> pure x
 
 mutateInstanceName :: Mutation (InstanceName CExpr)
-mutateInstanceName (InstanceName i r2) = InstanceName i <$> traverse mutateR2 r2
+mutateInstanceName (InstanceName i r2) = InstanceName i <$> mapM mutateR2 r2
 
 mutateGICMos :: Mutation (GICMos NExpr CExpr)
 mutateGICMos (GICMos i lv inp nc pc) =
-  GICMos <$> traverse mutateInstanceName i
+  GICMos <$> mapM mutateInstanceName i
     <*> mutateNLV lv
     <*> mutateNExpr inp
     <*> mutateNExpr nc
@@ -428,34 +427,34 @@ mutateGICMos (GICMos i lv inp nc pc) =
 
 mutateGIEnable :: Mutation (GIEnable NExpr CExpr)
 mutateGIEnable (GIEnable i lv inp en) =
-  GIEnable <$> traverse mutateInstanceName i <*> mutateNLV lv <*> mutateNExpr inp <*> mutateNExpr en
+  GIEnable <$> mapM mutateInstanceName i <*> mutateNLV lv <*> mutateNExpr inp <*> mutateNExpr en
 
 mutateGIMos :: Mutation (GIMos NExpr CExpr)
 mutateGIMos (GIMos i lv inp en) =
-  GIMos <$> traverse mutateInstanceName i <*> mutateNLV lv <*> mutateNExpr inp <*> mutateNExpr en
+  GIMos <$> mapM mutateInstanceName i <*> mutateNLV lv <*> mutateNExpr inp <*> mutateNExpr en
 
 mutateGINIn :: Mutation (GINIn NExpr CExpr)
 mutateGINIn (GINIn i lv inp) =
-  GINIn <$> traverse mutateInstanceName i <*> mutateNLV lv <*> (mapM mutateNExpr inp >>= mutateList)
+  GINIn <$> mapM mutateInstanceName i <*> mutateNLV lv <*> (mapM mutateNExpr inp >>= mutateList)
 
 mutateGINOut :: Mutation (GINOut NExpr CExpr)
 mutateGINOut (GINOut i lv inp) =
-  GINOut <$> traverse mutateInstanceName i <*> (mapM mutateNLV lv >>= mutateList) <*> mutateNExpr inp
+  GINOut <$> mapM mutateInstanceName i <*> (mapM mutateNLV lv >>= mutateList) <*> mutateNExpr inp
 
 mutateGIPassEn :: Mutation (GIPassEn NExpr CExpr)
 mutateGIPassEn (GIPassEn i lhs rhs en) =
-  GIPassEn <$> traverse mutateInstanceName i <*> mutateNLV lhs <*> mutateNLV rhs <*> mutateNExpr en
+  GIPassEn <$> mapM mutateInstanceName i <*> mutateNLV lhs <*> mutateNLV rhs <*> mutateNExpr en
 
 mutateGIPass :: Mutation (GIPass NExpr CExpr)
 mutateGIPass (GIPass i lhs rhs) =
-  GIPass <$> traverse mutateInstanceName i <*> mutateNLV lhs <*> mutateNLV rhs
+  GIPass <$> mapM mutateInstanceName i <*> mutateNLV lhs <*> mutateNLV rhs
 
 mutateGIPull :: Mutation (GIPull NExpr CExpr)
-mutateGIPull (GIPull i lv) = GIPull <$> traverse mutateInstanceName i <*> mutateNLV lv
+mutateGIPull (GIPull i lv) = GIPull <$> mapM mutateInstanceName i <*> mutateNLV lv
 
 mutateUDPInst :: Mutation (UDPInst NExpr CExpr)
 mutateUDPInst (UDPInst i lv args) =
-  UDPInst <$> traverse mutateInstanceName i <*> mutateNLV lv <*> mapM mutateNExpr args
+  UDPInst <$> mapM mutateInstanceName i <*> mutateNLV lv <*> mapM mutateNExpr args
 
 mutateModInst :: Mutation (ModInst NExpr CExpr)
 mutateModInst (ModInst i ports) = ModInst <$> mutateInstanceName i <*> mutatePortAss ports
@@ -466,40 +465,40 @@ mutateUknInst (UknInst i a0 args) =
 
 mutateGate :: Mutation (Gate Identity NExpr CExpr)
 mutateGate x = case x of
-  GCMos r d3 i -> GCMos r <$> traverse mutateD3 d3 <*> traverse mutateGICMos i
-  GEnable r b ds d3 i -> GEnable r b ds <$> traverse mutateD3 d3 <*> traverse mutateGIEnable i
-  GMos r np d3 i -> GMos r np <$> traverse mutateD3 d3 <*> traverse mutateGIMos i
-  GNIn nin n ds d2 i -> GNIn nin n ds <$> traverse mutateD2 d2 <*> traverse mutateGINIn i
-  GNOut r ds d2 i -> GNOut r ds <$> traverse mutateD2 d2 <*> traverse mutateGINOut i
-  GPassEn r b d2 i -> GPassEn r b <$> traverse mutateD2 d2 <*> traverse mutateGIPassEn i
-  GPass r i -> GPass r <$> traverse mutateGIPass i
-  GPull ud ds i -> GPull ud ds <$> traverse mutateGIPull i
+  GCMos r d3 i -> GCMos r <$> mapM mutateD3 d3 <*> mapM mutateGICMos i
+  GEnable r b ds d3 i -> GEnable r b ds <$> mapM mutateD3 d3 <*> mapM mutateGIEnable i
+  GMos r np d3 i -> GMos r np <$> mapM mutateD3 d3 <*> mapM mutateGIMos i
+  GNIn nin n ds d2 i -> GNIn nin n ds <$> mapM mutateD2 d2 <*> mapM mutateGINIn i
+  GNOut r ds d2 i -> GNOut r ds <$> mapM mutateD2 d2 <*> mapM mutateGINOut i
+  GPassEn r b d2 i -> GPassEn r b <$> mapM mutateD2 d2 <*> mapM mutateGIPassEn i
+  GPass r i -> GPass r <$> mapM mutateGIPass i
+  GPull ud ds i -> GPull ud ds <$> mapM mutateGIPull i
 
 mutateMGI :: Mutation (ModGenBlockedItem NExpr CExpr)
 mutateMGI = mutateWith _msModGenItem >=> \x -> case x of
-  MGINetInit nt ds np ni -> MGINetInit nt ds <$> mutateNP np <*> traverse mutateNI ni
-  MGINetDecl nt np nd -> MGINetDecl nt <$> mutateNP np <*> traverse mutateND nd
-  MGITriD ds np ni -> MGITriD ds <$> mutateNP np <*> traverse mutateNI ni
-  MGITriC cs np nd -> MGITriC cs <$> mutateNP np <*> traverse mutateND nd
+  MGINetInit nt ds np ni -> MGINetInit nt ds <$> mutateNP np <*> mapM mutateNI ni
+  MGINetDecl nt np nd -> MGINetDecl nt <$> mutateNP np <*> mapM mutateND nd
+  MGITriD ds np ni -> MGITriD ds <$> mutateNP np <*> mapM mutateNI ni
+  MGITriC cs np nd -> MGITriC cs <$> mutateNP np <*> mapM mutateND nd
   MGIBlockDecl bd ->
-    MGIBlockDecl <$> mutateBD traverse (bitraverse (mapM mutateR2) mutateCExpr) bd
+    MGIBlockDecl <$> mutateBD mapM (bitraverse (mapM mutateR2) mutateCExpr) bd
   MGITask a i d b ->
     MGITask a i <$> (mapM (mutateAttrIded mutateTFBD) d >>= mutateList) <*> mutateMStmt b
   MGIFunc a t i d b ->
-    flip (MGIFunc a) i <$> traverse mutateCT t
+    flip (MGIFunc a) i <$> mapM mutateCT t
       <*> (mapM (mutateAttrIded mutateTFBD) d >>= mutateList)
       <*> mutateFStmt b
-  MGIDefParam po -> MGIDefParam <$> traverse mutatePO po
-  MGIContAss ds d3 na -> MGIContAss ds <$> traverse mutateD3 d3 <*> traverse mutateNAss na
+  MGIDefParam po -> MGIDefParam <$> mapM mutatePO po
+  MGIContAss ds d3 na -> MGIContAss ds <$> mapM mutateD3 d3 <*> mapM mutateNAss na
   MGIGate g -> MGIGate <$> mutateGate g
   MGIUDPInst kind ds d2 i ->
-    MGIUDPInst kind ds <$> traverse mutateD2 d2 <*> traverse mutateUDPInst i
+    MGIUDPInst kind ds <$> mapM mutateD2 d2 <*> mapM mutateUDPInst i
   MGIModInst kind params i ->
-    MGIModInst kind <$> mutateParamAss params <*> traverse mutateModInst i
+    MGIModInst kind <$> mutateParamAss params <*> mapM mutateModInst i
   MGIUnknownInst kind params i ->
     MGIUnknownInst kind
-      <$> traverse (bitraverse mutateNExpr $ bitraverse mutateNExpr mutateNExpr) params
-      <*> traverse mutateUknInst i
+      <$> mapM (bitraverse mutateNExpr $ bitraverse mutateNExpr mutateNExpr) params
+      <*> mapM mutateUknInst i
   MGIInitial s -> MGIInitial <$> mutateAStmt s
   MGIAlways s -> MGIAlways <$> mutateAStmt s
   MGILoopGen ii iv c ui uv b ->
@@ -513,11 +512,11 @@ mutateMGI = mutateWith _msModGenItem >=> \x -> case x of
 
 mutateTCE :: Mutation (TimingCheckEvent NExpr CExpr)
 mutateTCE (TimingCheckEvent ec st tcc) =
-  TimingCheckEvent ec <$> mutateST st <*> traverse (traverse mutateNExpr) tcc
+  TimingCheckEvent ec <$> mutateST st <*> mapM (mapM mutateNExpr) tcc
 
 mutateCTCE :: Mutation (ControlledTimingCheckEvent NExpr CExpr)
 mutateCTCE (ControlledTimingCheckEvent ec st tcc) =
-  ControlledTimingCheckEvent ec <$> mutateST st <*> traverse (traverse mutateNExpr) tcc
+  ControlledTimingCheckEvent ec <$> mutateST st <*> mapM (mapM mutateNExpr) tcc
 
 mutateSTCA :: Mutation (STCArgs NExpr CExpr)
 mutateSTCA (STCArgs de re tcl n) =
@@ -526,10 +525,10 @@ mutateSTCA (STCArgs de re tcl n) =
 mutateSTCAA :: Mutation (STCAddArgs NExpr CExpr)
 mutateSTCAA (STCAddArgs tcl sc ctc dr dd) =
   STCAddArgs <$> mutateNExpr tcl
-    <*> traverse mutateNMTM sc
-    <*> traverse mutateNMTM ctc
-    <*> traverse (traverse $ traverse mutateCMTM) dr
-    <*> traverse (traverse $ traverse mutateCMTM) dd
+    <*> mapM mutateNMTM sc
+    <*> mapM mutateNMTM ctc
+    <*> mapM (mapM $ mapM mutateCMTM) dr
+    <*> mapM (mapM $ mapM mutateCMTM) dd
 
 mutateMPC :: Mutation (ModulePathCondition MPExpr)
 mutateMPC x = case x of
@@ -570,16 +569,16 @@ mutatePDV = mutateWith _msPDV >=> \x -> case x of
 
 mutateSI :: Mutation (SpecifyBlockedItem NExpr CExpr MPExpr)
 mutateSI = mutateWith _msSpecItem >=> \x -> case x of
-  SISpecParam r2 spd -> SISpecParam <$> traverse mutateR2 r2 <*> traverse mutateSPD spd
-  SIPulsestyleOnevent st -> SIPulsestyleOnevent <$> traverse mutateST st
-  SIPulsestyleOndetect st -> SIPulsestyleOndetect <$> traverse mutateST st
-  SIShowcancelled st -> SIShowcancelled <$> traverse mutateST st
-  SINoshowcancelled st -> SINoshowcancelled <$> traverse mutateST st
+  SISpecParam r2 spd -> SISpecParam <$> mapM mutateR2 r2 <*> mapM mutateSPD spd
+  SIPulsestyleOnevent st -> SIPulsestyleOnevent <$> mapM mutateST st
+  SIPulsestyleOndetect st -> SIPulsestyleOndetect <$> mapM mutateST st
+  SIShowcancelled st -> SIShowcancelled <$> mapM mutateST st
+  SINoshowcancelled st -> SINoshowcancelled <$> mapM mutateST st
   SIPathDeclaration mpc con pol eds v ->
     SIPathDeclaration <$> mutateMPC mpc
       <*> mutateSP con
       <*> pure pol
-      <*> traverse (bitraverse mutateNExpr pure) eds
+      <*> mapM (bitraverse mutateNExpr pure) eds
       <*> mutatePDV v
   SISetup a -> SISetup <$> mutateSTCA a
   SIHold a -> SIHold <$> mutateSTCA a
@@ -589,15 +588,15 @@ mutateSI = mutateWith _msSpecItem >=> \x -> case x of
   SIRecrem a aa -> SIRecrem <$> mutateSTCA a <*> mutateSTCAA aa
   SISkew a -> SISkew <$> mutateSTCA a
   SITimeSkew a eb ra ->
-    SITimeSkew <$> mutateSTCA a <*> traverse mutateCExpr eb <*> traverse mutateCExpr ra
+    SITimeSkew <$> mutateSTCA a <*> mapM mutateCExpr eb <*> mapM mutateCExpr ra
   SIFullSkew a tcl eb ra ->
     SIFullSkew <$> mutateSTCA a
       <*> mutateNExpr tcl
-      <*> traverse mutateCExpr eb
-      <*> traverse mutateCExpr ra
+      <*> mapM mutateCExpr eb
+      <*> mapM mutateCExpr ra
   SIPeriod ctce tcl n -> SIPeriod <$> mutateCTCE ctce <*> mutateNExpr tcl <*> pure n
   SIWidth ctce tcl t n ->
-    SIWidth <$> mutateCTCE ctce <*> mutateNExpr tcl <*> traverse mutateCExpr t <*> pure n
+    SIWidth <$> mutateCTCE ctce <*> mutateNExpr tcl <*> mapM mutateCExpr t <*> pure n
   SINoChange re de se ee n ->
     SINoChange <$> mutateTCE re <*> mutateTCE de <*> mutateNMTM se <*> mutateNMTM ee <*> pure n
 
@@ -605,7 +604,7 @@ mutateSPD :: Mutation (SpecParamDecl CExpr)
 mutateSPD x = case x of
   SPDAssign i v -> SPDAssign i <$> mutateCMTM v
   SPDPathPulse io rej err ->
-    SPDPathPulse <$> traverse (bitraverse mutateST mutateST) io
+    SPDPathPulse <$> mapM (bitraverse mutateST mutateST) io
       <*> mutateCMTM rej
       <*> mutateCMTM err
 
@@ -614,11 +613,11 @@ mutateMI x = do
   y <- mutateWith _msModItem x
   case y of
     MIMGI mgi -> MIMGI <$> mutateAttributed mutateMGI mgi
-    MIPort p -> MIPort <$> mutateAttrIded (traverse mutateSR) p
+    MIPort p -> MIPort <$> mutateAttrIded (mapM mutateSR) p
     MIParameter p -> MIParameter <$> mutateAttrIded mutateParam p
     MIGenReg l -> MIGenReg <$> mapM (mutateAttributed mutateMGI) l
     MISpecParam a r2 spd ->
-      MISpecParam <$> mutateAttr a <*> traverse mutateR2 r2 <*> mutateSPD spd
+      MISpecParam <$> mutateAttr a <*> mapM mutateR2 r2 <*> mutateSPD spd
     MISpecBlock l -> fmap MISpecBlock $ mapM mutateSI l >>= mutateList
 
 mutateGB :: Mutation (GenerateBlock NExpr CExpr)
@@ -629,7 +628,7 @@ mutateGB =
 mutateMB :: Mutation (ModuleBlock NExpr CExpr MPExpr)
 mutateMB = mutateWith _msModule >=> \(ModuleBlock a b i pi mi ts c p dnt) ->
   (\a pi mi -> ModuleBlock a b i pi mi ts c p dnt) <$> mutateAttr a
-    <*> mapM (traverse $ mapM $ traverse $ traverse mutateCRE) pi
+    <*> mapM (mapM $ mapM $ mapM $ mapM mutateCRE) pi
     <*> mapM mutateMI mi
 
 mutatePT :: Mutation PrimTable
@@ -639,7 +638,7 @@ mutatePT = mutateWith _msPrimTable >=> \x -> case x of
 
 mutatePP :: Mutation (PrimPort CExpr)
 mutatePP x = case x of
-  PPOutReg e -> PPOutReg <$> traverse mutateCExpr e
+  PPOutReg e -> PPOutReg <$> mapM mutateCExpr e
   _ -> pure x
 
 mutatePB :: Mutation (PrimitiveBlock CExpr)
