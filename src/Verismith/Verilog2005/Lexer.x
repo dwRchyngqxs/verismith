@@ -1,4 +1,3 @@
--- Module      : Verismith.Verilog2005.Lexer
 -- Description : Partial Verilog 2005 lexer to reconstruct the AST.
 -- Copyright   : (c) 2023 Quentin Corradi
 -- License     : GPL-3
@@ -538,7 +537,7 @@ endkwcompdir :: Position -> Alex (Maybe PosToken)
 endkwcompdir p = do
   mkw <- gets _asKeywords
   case mkw of
-    [] -> alexError p "`end_kewords encountered without a previous matching `begin_keywords"
+    [] -> alexError p "`end_keywords encountered without a previous matching `begin_keywords"
     _ : kw -> modify' (\s -> s { _asKeywords = kw }) >> mkPos p CDEndKeywords
 
 isKW :: SBS.ByteString -> Bool
